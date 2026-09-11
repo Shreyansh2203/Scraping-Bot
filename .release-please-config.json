@@ -1,0 +1,30 @@
+{
+  "packages": {
+    ".": {
+      "package-name": "scraping-bot",
+      "release-type": "python"
+    }
+  },
+  "changelog-sections": [
+    {
+      "section": "Added",
+      "type": "feat"
+    },
+    {
+      "section": "Changed",
+      "type": "refactor"
+    },
+    {
+      "section": "Fixed",
+      "type": "fix"
+    },
+    {
+      "section": "Documentation",
+      "type": "docs"
+    },
+    {
+      "section": "Dependencies",
+      "type": "chore"
+    }
+  ]
+}

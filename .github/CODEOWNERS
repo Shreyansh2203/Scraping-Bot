@@ -1,0 +1,20 @@
+# Code owners
+# This file defines who should review changes to specific paths.
+
+* @Shreyansh2203
+
+# Core bot logic
+/bot/ @Shreyansh2203
+/core/ @Shreyansh2203
+/tests/ @Shreyansh2203
+
+# Deployment and infrastructure
+/Dockerfile @Shreyansh2203
+/render.yaml @Shreyansh2203
+/.github/ @Shreyansh2203
+
+# Documentation
+/README.md @Shreyansh2203
+/CHANGELOG.md @Shreyansh2203
+/CONTRIBUTING.md @Shreyansh2203
+/SECURITY.md @Shreyansh2203

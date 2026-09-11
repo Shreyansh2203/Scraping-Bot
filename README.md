@@ -52,6 +52,13 @@ pytest --cov=bot --cov=core
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+### Branch Protection
+
+The `main` branch is protected. All changes require:
+- Passing CI checks (lint, tests, Docker build)
+- At least one approving review
+- All conversations resolved
+
 ## Architecture
 
 ```
@@ -65,6 +72,14 @@ telegram-bot/
 ├── pyproject.toml       # Project metadata and tools
 └── requirements.txt     # Python dependencies
 ```
+
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for security policy and vulnerability reporting.
 
 ## License
 
