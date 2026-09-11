@@ -1,0 +1,39 @@
+# Large media / downloads
+downloads/
+downloads_backup/
+downloads_retry/
+*.mp4
+*.mkv
+*.webm
+*.m4a
+*.mp3
+*.opus
+*.mov
+
+# State / logs
+.download_state.json
+state/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Env files
+.env

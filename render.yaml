@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: tg-video-dl-bot
+    runtime: docker
+    plan: free
+    branch: main
+    rootDir: .
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: DOWNLOAD_DIR
+        value: /app/downloads
+      - key: STATE_FILE
+        value: /app/state/bot_state.json
+      - key: CONCURRENT_DOWNLOADS
+        value: "2"
+      - key: MAX_FILE_SIZE_MB
+        value: "50"
+      - key: ALLOWED_USERS
+        value: ""  # comma-separated Telegram user IDs, empty = public
+    disk:
+      name: bot-data
+      mountPath: /app/downloads
+      sizeGB: 1

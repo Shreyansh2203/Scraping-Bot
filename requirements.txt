@@ -1,0 +1,6 @@
+aiogram==3.4.1
+yt-dlp
+browser-cookie3
+aiosqlite
+python-dotenv
+pillow
