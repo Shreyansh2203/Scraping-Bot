@@ -20,6 +20,8 @@ try:
 except ImportError:
     raise RuntimeError("yt-dlp is required. Install with: pip install yt-dlp")
 
+__version__ = "0.1.0"
+
 SUPPORTED_EXTENSIONS = {".mp4", ".mkv", ".webm", ".m4a", ".mp3", ".opus", ".mov"}
 DEFAULT_MIN_FILE_SIZE = 10240  # 10KB
 

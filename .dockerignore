@@ -1,4 +1,13 @@
-# Large media / downloads
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+
+# Large artifacts
 downloads/
 downloads_backup/
 downloads_retry/
@@ -14,25 +23,6 @@ downloads_retry/
 .download_state.json
 state/
 *.log
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-.venv/
-venv/
-env/
-
-# Test artifacts
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-.tox/
-coverage.xml
 
 # IDE
 .vscode/
