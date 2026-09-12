@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Optional
 
 from aiogram import Router, types
 from aiogram.types import FSInputFile
@@ -20,11 +21,16 @@ _URL_RE = re.compile(
 
 @router.message(lambda m: bool(_URL_RE.search(m.text or "")))
 async def handle_url(message: types.Message, downloader: DownloaderWrapper) -> None:
-    url = _URL_RE.search(message.text).group(0)
+    text: Optional[str] = message.text
+    match = _URL_RE.search(text or "")
+    if not match:
+        return
+    url = match.group(0)
     status_msg = await message.reply("⏳ Downloading...")
 
     try:
-        result = await downloader.download_url(url, message.from_user.id)
+        user_id = message.from_user.id if message.from_user else 0
+        result = await downloader.download_url(url, user_id)
 
         if result.success and result.file_path and result.file_path.exists():
             size_mb = result.file_path.stat().st_size / (1024 * 1024)
@@ -35,10 +41,8 @@ async def handle_url(message: types.Message, downloader: DownloaderWrapper) -> N
                 result.file_path.unlink(missing_ok=True)
                 return
 
-            caption = (
-                f"<code>{url}</code>\n"
-                f"Size: {size_mb:.1f} MB"
-                + (f"\nResolution: {result.resolution}" if result.resolution else "")
+            caption = f"<code>{url}</code>\n" f"Size: {size_mb:.1f} MB" + (
+                f"\nResolution: {result.resolution}" if result.resolution else ""
             )
 
             await message.reply_document(

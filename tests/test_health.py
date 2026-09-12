@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from bot.main import __version__, health_handler
@@ -20,7 +22,7 @@ async def test_health_handler(mock_downloader):
     response = await health_handler(request)
     assert response.status == 200
 
-    data = await response.json()
+    data = json.loads(response.body.decode())
     assert data["status"] == "ok"
     assert data["version"] == __version__
     assert data["concurrent"] == 2

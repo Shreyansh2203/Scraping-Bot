@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import logging
 import os
@@ -15,9 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-try:
-    import yt_dlp
-except ImportError:
+if importlib.util.find_spec("yt_dlp") is None:
     raise RuntimeError("yt-dlp is required. Install with: pip install yt-dlp")
 
 __version__ = "0.1.0"
@@ -117,6 +116,8 @@ class DownloaderWrapper:
         if m:
             scheme = m.group(1).lower()
             host = m.group(2).lower()
+            if host.startswith("www."):
+                host = host[4:]
             path = m.group(3) or ""
             url = f"{scheme}{host}{path}"
         return re.sub(r"/+$", "", url)
@@ -199,26 +200,39 @@ class DownloaderWrapper:
         has_ffmpeg = shutil.which("ffmpeg") is not None
         fmt = (
             "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
-            if has_ffmpeg else "best"
+            if has_ffmpeg
+            else "best"
         )
         sort = ["res", "fps", "tbr", "codec"]
 
         cmd = [
-            sys.executable, "-m", "yt_dlp",
+            sys.executable,
+            "-m",
+            "yt_dlp",
             url,
-            "--format", fmt,
-            "--format-sort", ",".join(sort),
+            "--format",
+            fmt,
+            "--format-sort",
+            ",".join(sort),
             "--prefer-free-formats",
-            "--output", "%(title)s [%(id)s].%(ext)s",
+            "--output",
+            "%(title)s [%(id)s].%(ext)s",
             "--no-overwrites",
             "--continue",
-            "--retries", "0",
-            "--fragment-retries", "0",
-            "--socket-timeout", str(self.timeout),
-            "--print", "after_move:filepath",
-            "--print", "after_move:filesize",
-            "--print", "after_move:resolution",
-            "--print", "after_move:format_id",
+            "--retries",
+            "0",
+            "--fragment-retries",
+            "0",
+            "--socket-timeout",
+            str(self.timeout),
+            "--print",
+            "after_move:filepath",
+            "--print",
+            "after_move:filesize",
+            "--print",
+            "after_move:resolution",
+            "--print",
+            "after_move:format_id",
             "--newline",
             "--no-warnings",
             "-q",
@@ -235,7 +249,7 @@ class DownloaderWrapper:
 
         if returncode == 0:
             lines = output.split("\n")
-            prints = [l for l in lines if l and not l.startswith("[")]
+            prints = [line for line in lines if line and not line.startswith("[")]
 
             if len(prints) >= 4:
                 result["file"] = "\n".join(prints[:-3]).strip()
@@ -270,15 +284,17 @@ class DownloaderWrapper:
 
         elif returncode == 1:
             error_lines = [
-                l for l in output.split("\n") if l.strip() and not l.startswith("[download]")
+                line
+                for line in output.split("\n")
+                if line.strip() and not line.startswith("[download]")
             ]
             result["error"] = (error_lines[-1] if error_lines else "yt-dlp reported failure")[:200]
         else:
             error_lines = [
-                l.strip()
-                for l in output.split("\n")
-                if l.strip()
-                and not l.startswith(("[download]", "[ExtractAudio]", "[ffmpeg]", "WARNING"))
+                line.strip()
+                for line in output.split("\n")
+                if line.strip()
+                and not line.startswith(("[download]", "[ExtractAudio]", "[ffmpeg]", "WARNING"))
             ]
             result["error"] = (
                 error_lines[-1] if error_lines else f"yt-dlp exited with code {returncode}"
@@ -315,7 +331,8 @@ class DownloaderWrapper:
 
         if ytdlp_id:
             matches = [
-                p for p in candidates
+                p
+                for p in candidates
                 if p.exists() and p.suffix in SUPPORTED_EXTENSIONS and ytdlp_id in p.name
             ]
             if matches:
@@ -332,7 +349,8 @@ class DownloaderWrapper:
 
         if url_id:
             matches = [
-                p for p in candidates
+                p
+                for p in candidates
                 if p.exists()
                 and p.suffix in SUPPORTED_EXTENSIONS
                 and url_id in p.name
@@ -342,7 +360,8 @@ class DownloaderWrapper:
                 return matches[0]
 
         valid = [
-            p for p in candidates
+            p
+            for p in candidates
             if p.exists() and p.suffix in SUPPORTED_EXTENSIONS and now - p.stat().st_mtime <= window
         ]
         if valid:
@@ -358,10 +377,14 @@ class DownloaderWrapper:
             result = subprocess.run(
                 [
                     ffprobe,
-                    "-v", "error",
-                    "-select_streams", "v:0",
-                    "-show_entries", "stream=width,height",
-                    "-of", "csv=s=x:p=0",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=width,height",
+                    "-of",
+                    "csv=s=x:p=0",
                     str(file_path),
                 ],
                 capture_output=True,

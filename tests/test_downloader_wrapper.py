@@ -19,8 +19,14 @@ def test_normalize_url():
         state_file=Path("state.json"),
     )
 
-    assert wrapper._normalize("https://www.Instagram.com/reel/ABC123/") == "https://instagram.com/reel/ABC123"
-    assert wrapper._normalize("HTTPS://X.COM/user/status/123456/") == "https://x.com/user/status/123456"
+    assert (
+        wrapper._normalize("https://www.Instagram.com/reel/ABC123/")
+        == "https://instagram.com/reel/ABC123"
+    )
+    assert (
+        wrapper._normalize("HTTPS://X.COM/user/status/123456/")
+        == "https://x.com/user/status/123456"
+    )
     assert wrapper._normalize("https://example.com/") == "https://example.com"
 
 
