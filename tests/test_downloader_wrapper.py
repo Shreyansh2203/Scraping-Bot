@@ -1,6 +1,8 @@
-import pytest
 from pathlib import Path
-from core.downloader_wrapper import DownloaderWrapper, DownloadResult, SUPPORTED_EXTENSIONS
+
+import pytest
+
+from core.downloader_wrapper import SUPPORTED_EXTENSIONS, DownloaderWrapper, DownloadResult
 
 
 @pytest.fixture

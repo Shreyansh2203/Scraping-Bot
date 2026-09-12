@@ -1,7 +1,8 @@
+import time
+from collections import defaultdict
+
 from aiogram import BaseMiddleware
 from aiogram.types import Message
-from collections import defaultdict
-import time
 
 from core.config import settings
 

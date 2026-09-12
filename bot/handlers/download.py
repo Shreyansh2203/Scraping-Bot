@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
 
 from aiogram import Router, types
-from aiogram.enums import ParseMode
 from aiogram.types import FSInputFile
 
 from core.config import settings

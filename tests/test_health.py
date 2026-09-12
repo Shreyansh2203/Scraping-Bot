@@ -1,6 +1,6 @@
 import pytest
-from aiohttp import web
-from bot.main import health_handler, __version__
+
+from bot.main import __version__, health_handler
 
 
 @pytest.fixture

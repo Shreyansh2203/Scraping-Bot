@@ -3,19 +3,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-from aiohttp import web
 from aiogram import Bot, Dispatcher
-from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiohttp import web
 
+from bot.handlers import commands, download
 from core.config import settings
 from core.downloader_wrapper import DownloaderWrapper
-from bot.handlers import commands, download
 
 __version__ = "0.1.0"
 
