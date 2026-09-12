@@ -59,6 +59,7 @@ class DownloaderWrapper:
         self.semaphore = asyncio.Semaphore(concurrent)
         self._state: dict[str, Any] = {"completed": {}, "failed": {}, "meta": {}}
         self._load_state()
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def _load_state(self) -> None:
         if not self.state_file.exists():

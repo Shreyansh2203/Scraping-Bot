@@ -26,4 +26,3 @@ services:
       mountPath: /app/downloads
       sizeGB: 1
     healthCheckPath: /health
-    healthCheckTimeout: 10
