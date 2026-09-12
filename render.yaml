@@ -21,8 +21,4 @@ services:
         value: ""  # comma-separated Telegram user IDs, empty = public
       - key: HEALTH_PORT
         value: "8080"
-    disk:
-      name: bot-data
-      mountPath: /app/downloads
-      sizeGB: 1
     healthCheckPath: /health
