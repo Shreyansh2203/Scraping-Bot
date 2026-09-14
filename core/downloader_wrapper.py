@@ -337,7 +337,8 @@ class DownloaderWrapper:
             if has_ffmpeg
             else "best"
         )
-        sort = ["res", "fps", "tbr", "codec"]
+
+        sort = ["res", "size", "fps", "tbr", "codec"]
 
         cmd = [
             sys.executable,
