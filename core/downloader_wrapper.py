@@ -345,6 +345,8 @@ class DownloaderWrapper:
             "-m",
             "yt_dlp",
             url,
+            "--extractor-args",
+            "twitter:api=syndication",
             "--format",
             fmt,
             "--format-sort",
