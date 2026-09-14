@@ -351,7 +351,7 @@ class DownloaderWrapper:
             ",".join(sort),
             "--prefer-free-formats",
             "--output",
-            "%(title)s [%(id)s].%(ext)s",
+            f"%(title)s [%(id)s]_{int(time.time())}.%(ext)s",
             "--no-overwrites",
             "--continue",
             "--retries",
