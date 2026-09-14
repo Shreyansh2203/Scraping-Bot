@@ -41,6 +41,7 @@ def test_download_result_defaults():
     result = DownloadResult(success=False)
     assert result.success is False
     assert result.file_path is None
+    assert result.file_paths == []
     assert result.size == 0
     assert result.resolution is None
     assert result.error is None
@@ -50,7 +51,7 @@ def test_download_result_defaults():
 def test_download_result_success():
     result = DownloadResult(
         success=True,
-        file_path=Path("/tmp/test.mp4"),
+        file_paths=[Path("/tmp/test.mp4")],
         size=1024,
         resolution="1920x1080",
         format_id="best[ext=mp4]",
@@ -58,6 +59,7 @@ def test_download_result_success():
     )
     assert result.success is True
     assert result.file_path == Path("/tmp/test.mp4")
+    assert result.file_paths == [Path("/tmp/test.mp4")]
     assert result.size == 1024
     assert result.resolution == "1920x1080"
     assert result.verified is True
@@ -82,7 +84,7 @@ def test_state_persistence(tmp_dirs):
     assert wrapper2.is_completed(url) is False
 
     wrapper.mark_completed(
-        url, DownloadResult(success=True, file_path=output_dir / "test.mp4", size=1024)
+        url, DownloadResult(success=True, file_paths=[output_dir / "test.mp4"], size=1024)
     )
     wrapper3 = DownloaderWrapper(
         output_dir=output_dir,

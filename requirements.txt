@@ -1,5 +1,6 @@
 aiogram==3.4.1
 yt-dlp
+gallery-dl
 browser-cookie3
 aiosqlite
 python-dotenv

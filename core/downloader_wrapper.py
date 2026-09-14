@@ -12,19 +12,32 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 if importlib.util.find_spec("yt_dlp") is None:
     raise RuntimeError("yt-dlp is required. Install with: pip install yt-dlp")
+if importlib.util.find_spec("gallery_dl") is None:
+    raise RuntimeError("gallery-dl is required. Install with: pip install gallery-dl")
 
 __version__ = "0.1.0"
 
-SUPPORTED_EXTENSIONS = {".mp4", ".mkv", ".webm", ".m4a", ".mp3", ".opus", ".mov"}
-DEFAULT_MIN_FILE_SIZE = 10240  # 10KB
-
+SUPPORTED_EXTENSIONS = {
+    ".mp4",
+    ".mkv",
+    ".webm",
+    ".m4a",
+    ".mp3",
+    ".opus",
+    ".mov",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+}
+DEFAULT_MIN_FILE_SIZE = 1024  # 1KB for images
 
 logger = logging.getLogger("downloader")
 
@@ -32,12 +45,16 @@ logger = logging.getLogger("downloader")
 @dataclass
 class DownloadResult:
     success: bool
-    file_path: Optional[Path] = None
+    file_paths: list[Path] = field(default_factory=list)
     size: int = 0
     resolution: Optional[str] = None
     format_id: Optional[str] = None
     error: Optional[str] = None
     verified: bool = False
+
+    @property
+    def file_path(self) -> Optional[Path]:
+        return self.file_paths[0] if self.file_paths else None
 
 
 class DownloaderWrapper:
@@ -100,7 +117,7 @@ class DownloaderWrapper:
         key = self._normalize(url)
         with self._lock:
             self._state["completed"][key] = {
-                "file": str(result.file_path.resolve()) if result.file_path else None,
+                "files": [str(p.resolve()) for p in result.file_paths] if result.file_paths else [],
                 "size": result.size,
                 "resolution": result.resolution,
                 "format_id": result.format_id,
@@ -242,7 +259,7 @@ class DownloaderWrapper:
                 else:
                     dl_result = DownloadResult(
                         success=True,
-                        file_path=file_path,
+                        file_paths=[file_path],
                         size=result.get("size", 0),
                         resolution=result.get("resolution"),
                         format_id=result.get("format_id"),
@@ -252,11 +269,69 @@ class DownloaderWrapper:
                     return dl_result
 
             error_msg = result.get("error", "Unknown error")
+
+            # Fallback to gallery-dl if yt-dlp fails
+            g_result = self._run_gallery_dl(url)
+            if g_result.success:
+                self.mark_completed(url, g_result)
+                return g_result
+
             self.mark_failed(url, error_msg)
             return DownloadResult(success=False, error=error_msg)
 
         self.mark_failed(url, last_error or "Unknown error")
         return DownloadResult(success=False, error=last_error or "Unknown error")
+
+    def _run_gallery_dl(self, url: str) -> DownloadResult:
+        output_dir = self.output_dir.resolve()
+        with tempfile.TemporaryDirectory(dir=output_dir) as temp_dir:
+            cmd = [
+                sys.executable,
+                "-m",
+                "gallery_dl",
+                "--directory",
+                temp_dir,
+                "-q",
+                url,
+            ]
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(output_dir),
+                    timeout=self.subprocess_timeout,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except Exception as exc:
+                return DownloadResult(success=False, error=f"gallery-dl error: {exc}")
+
+            if proc.returncode != 0:
+                return DownloadResult(
+                    success=False, error=f"gallery-dl failed: {proc.stderr or proc.stdout}"
+                )
+
+            downloaded_files = []
+            for root, _, files in os.walk(temp_dir):
+                for file in files:
+                    file_path = Path(root) / file
+                    if file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
+                        dest = output_dir / file_path.name
+                        counter = 1
+                        while dest.exists():
+                            dest = output_dir / f"{file_path.stem}_{counter}{file_path.suffix}"
+                            counter += 1
+                        shutil.move(str(file_path), str(dest))
+                        downloaded_files.append(dest)
+
+            if not downloaded_files:
+                return DownloadResult(success=False, error="gallery-dl returned no supported files")
+
+            total_size = sum(f.stat().st_size for f in downloaded_files if f.exists())
+
+            return DownloadResult(
+                success=True, file_paths=downloaded_files, size=total_size, verified=True
+            )
 
     def _build_command(self, url: str) -> list[str]:
         has_ffmpeg = shutil.which("ffmpeg") is not None
