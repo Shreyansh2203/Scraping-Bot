@@ -65,6 +65,7 @@ async def handle_url(message: types.Message, downloader: DownloaderWrapper) -> N
                 )
             elif len(valid_paths) > 1:
                 from typing import Any
+
                 media_group: list[Any] = []
                 for idx, p in enumerate(valid_paths[:10]):  # Telegram limit is 10 for media group
                     media = InputMediaDocument(media=FSInputFile(p))
