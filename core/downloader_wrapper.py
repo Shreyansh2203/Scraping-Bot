@@ -173,9 +173,6 @@ class DownloaderWrapper:
             return await asyncio.to_thread(self._download_sync, url, user_id)
 
     def _download_sync(self, url: str, user_id: int) -> DownloadResult:
-        if self.is_completed(url):
-            return DownloadResult(success=False, error="Already downloaded")
-
         cmd = self._build_command(url)
         output_dir = self.output_dir.resolve()
 
