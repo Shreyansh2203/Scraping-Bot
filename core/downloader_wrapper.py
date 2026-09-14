@@ -333,7 +333,7 @@ class DownloaderWrapper:
     def _build_command(self, url: str) -> list[str]:
         has_ffmpeg = shutil.which("ffmpeg") is not None
         fmt = (
-            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+            "bestvideo*[ext=mp4]+bestaudio[ext=m4a]/bestvideo*+bestaudio/best"
             if has_ffmpeg
             else "best"
         )
