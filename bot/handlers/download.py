@@ -8,7 +8,7 @@ from aiogram import Router, types
 from aiogram.types import FSInputFile
 
 from core.config import settings
-from core.downloader_wrapper import DownloadResult, DownloaderWrapper
+from core.downloader_wrapper import DownloaderWrapper, DownloadResult
 
 logger = logging.getLogger("bot.handlers.download")
 router = Router()

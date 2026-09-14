@@ -9,8 +9,8 @@ import re
 import shutil
 import subprocess
 import sys
-import threading
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -183,14 +183,19 @@ class DownloaderWrapper:
             except transient_errors as exc:
                 last_error = str(exc)
                 if attempt < max_retries:
-                    time.sleep(retry_delay * (2 ** attempt))
+                    time.sleep(retry_delay * (2**attempt))
                     continue
-                self.mark_failed(url, f"Transient error after {max_retries + 1} attempts: {last_error}")
-                return DownloadResult(success=False, error=f"Transient error after {max_retries + 1} attempts: {last_error}")
+                self.mark_failed(
+                    url, f"Transient error after {max_retries + 1} attempts: {last_error}"
+                )
+                return DownloadResult(
+                    success=False,
+                    error=f"Transient error after {max_retries + 1} attempts: {last_error}",
+                )
             except subprocess.TimeoutExpired:
                 last_error = f"Timeout after {self.subprocess_timeout}s"
                 if attempt < max_retries:
-                    time.sleep(retry_delay * (2 ** attempt))
+                    time.sleep(retry_delay * (2**attempt))
                     continue
                 self.mark_failed(url, last_error)
                 return DownloadResult(success=False, error=last_error)
@@ -208,14 +213,18 @@ class DownloaderWrapper:
                     result["file"] = str(file_path)
                     result["size"] = file_path.stat().st_size
                     if not result.get("resolution"):
-                        result["resolution"] = self._probe_resolution(file_path, self.ffprobe_timeout)
+                        result["resolution"] = self._probe_resolution(
+                            file_path, self.ffprobe_timeout
+                        )
                 else:
                     found = self._find_output_file(url, output_dir, result.get("file"))
                     if found:
                         result["file"] = str(found)
                         result["size"] = found.stat().st_size
                         if not result.get("resolution"):
-                            result["resolution"] = self._probe_resolution(found, self.ffprobe_timeout)
+                            result["resolution"] = self._probe_resolution(
+                                found, self.ffprobe_timeout
+                            )
                     else:
                         result["success"] = False
                         result["error"] = "Download completed but no output file found"
@@ -307,7 +316,15 @@ class DownloaderWrapper:
                 for line in lines
                 if line.strip()
                 and not line.startswith(
-                    ("[download]", "[ExtractAudio]", "[ffmpeg]", "[Merger]", "[info]", "[error]", "[warning]")
+                    (
+                        "[download]",
+                        "[ExtractAudio]",
+                        "[ffmpeg]",
+                        "[Merger]",
+                        "[info]",
+                        "[error]",
+                        "[warning]",
+                    )
                 )
             ]
 

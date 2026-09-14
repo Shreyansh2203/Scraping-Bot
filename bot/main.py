@@ -47,7 +47,9 @@ async def health_handler(request: web.Request) -> web.Response:
     return web.json_response(stats)
 
 
-async def start_health_server(bot: Bot, downloader: DownloaderWrapper, port: int = 8080, bind: str = "0.0.0.0") -> web.AppRunner:
+async def start_health_server(
+    bot: Bot, downloader: DownloaderWrapper, port: int = 8080, bind: str = "0.0.0.0"
+) -> web.AppRunner:
     app = web.Application()
     app["downloader"] = downloader
     app.router.add_get("/health", health_handler)
