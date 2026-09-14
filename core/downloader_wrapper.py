@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import tempfile
 import time
 from dataclasses import dataclass
@@ -48,6 +49,7 @@ class DownloaderWrapper:
         min_file_size: int = DEFAULT_MIN_FILE_SIZE,
         timeout: int = 30,
         subprocess_timeout: int = 180,
+        ffprobe_timeout: int = 10,
     ):
         self.output_dir = output_dir
         self.state_file = state_file
@@ -55,7 +57,10 @@ class DownloaderWrapper:
         self.min_file_size = min_file_size
         self.timeout = timeout
         self.subprocess_timeout = subprocess_timeout
+        self.ffprobe_timeout = ffprobe_timeout
         self.semaphore = asyncio.Semaphore(concurrent)
+        self._lock = threading.Lock()
+        self._shutdown = threading.Event()
         self._state: dict[str, Any] = {"completed": {}, "failed": {}, "meta": {}}
         self._load_state()
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -67,47 +72,71 @@ class DownloaderWrapper:
             text = self.state_file.read_text(encoding="utf-8")
             self._state = json.loads(text)
         except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("State file corrupted (%s), starting fresh.", exc)
+            logger.warning("State file corrupted (%s), attempting partial recovery.", exc)
+            try:
+                text = self.state_file.read_text(encoding="utf-8")
+                for i in range(len(text) - 1, -1, -1):
+                    if text[i] == "}":
+                        try:
+                            self._state = json.loads(text[: i + 1])
+                            logger.warning("Recovered partial state from %d bytes.", i + 1)
+                            return
+                        except json.JSONDecodeError:
+                            continue
+            except OSError:
+                pass
+            logger.warning("State file unrecoverable, starting fresh.")
             self._state = {"completed": {}, "failed": {}, "meta": {}}
 
-    def _save_state(self) -> None:
+    def is_completed(self, url: str) -> bool:
+        key = self._normalize(url)
+        with self._lock:
+            return key in self._state.get("completed", {})
+
+    def shutdown(self) -> None:
+        self._shutdown.set()
+
+    def mark_completed(self, url: str, result: DownloadResult) -> None:
+        key = self._normalize(url)
+        with self._lock:
+            self._state["completed"][key] = {
+                "file": str(result.file_path.resolve()) if result.file_path else None,
+                "size": result.size,
+                "resolution": result.resolution,
+                "format_id": result.format_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            self._state.get("failed", {}).pop(key, None)
+            state_snapshot = self._state.copy()
+
+        self._save_state_snapshot(state_snapshot)
+
+    def mark_failed(self, url: str, error: str) -> None:
+        key = self._normalize(url)
+        with self._lock:
+            self._state.setdefault("failed", {})[key] = {
+                "error": error,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            state_snapshot = self._state.copy()
+
+        self._save_state_snapshot(state_snapshot)
+
+    def _save_state_snapshot(self, state: dict[str, Any]) -> None:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(
             dir=str(self.state_file.parent), prefix=".state_", suffix=".tmp"
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(self._state, f, indent=2, ensure_ascii=False)
+                json.dump(state, f, indent=2, ensure_ascii=False)
+            os.chmod(tmp_path, 0o600)
             os.replace(tmp_path, str(self.state_file))
-        except Exception:
+        except (OSError, TypeError, ValueError):
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-
-    def is_completed(self, url: str) -> bool:
-        key = self._normalize(url)
-        return key in self._state.get("completed", {})
-
-    def mark_completed(self, url: str, result: DownloadResult) -> None:
-        key = self._normalize(url)
-        self._state["completed"][key] = {
-            "file": str(result.file_path.resolve()) if result.file_path else None,
-            "size": result.size,
-            "resolution": result.resolution,
-            "format_id": result.format_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        self._state.get("failed", {}).pop(key, None)
-        self._save_state()
-
-    def mark_failed(self, url: str, error: str) -> None:
-        key = self._normalize(url)
-        self._state.setdefault("failed", {})[key] = {
-            "error": error,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        self._save_state()
 
     @staticmethod
     def _normalize(url: str) -> str:
@@ -128,73 +157,97 @@ class DownloaderWrapper:
 
     def _download_sync(self, url: str, user_id: int) -> DownloadResult:
         if self.is_completed(url):
-            return DownloadResult(success=True, error="Already downloaded")
+            return DownloadResult(success=False, error="Already downloaded")
 
         cmd = self._build_command(url)
         output_dir = self.output_dir.resolve()
 
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=str(output_dir),
-                timeout=self.subprocess_timeout,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-        except subprocess.TimeoutExpired:
-            self.mark_failed(url, f"Timeout after {self.subprocess_timeout}s")
-            return DownloadResult(success=False, error=f"Timeout after {self.subprocess_timeout}s")
-        except Exception as exc:
-            self.mark_failed(url, str(exc))
-            return DownloadResult(success=False, error=str(exc))
+        max_retries = 2
+        retry_delay = 1.0
+        transient_errors = (TimeoutError, OSError, ConnectionError)
 
-        combined = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
-        result = self._parse_output(combined, proc.returncode)
-
-        if result.get("success") and result.get("file"):
-            raw = Path(result["file"])
-            file_path = raw if raw.is_absolute() else output_dir / raw
-            if file_path.exists():
-                result["file"] = str(file_path)
-                result["size"] = file_path.stat().st_size
-                if not result.get("resolution"):
-                    result["resolution"] = self._probe_resolution(file_path)
-            else:
-                found = self._find_output_file(url, output_dir, result.get("file"))
-                if found:
-                    result["file"] = str(found)
-                    result["size"] = found.stat().st_size
-                    if not result.get("resolution"):
-                        result["resolution"] = self._probe_resolution(found)
-                else:
-                    result["success"] = False
-                    result["error"] = "Download completed but no output file found"
-
-        if result.get("success") and result.get("file"):
-            file_path = Path(result["file"])
-            if not file_path.exists():
-                result["success"] = False
-                result["error"] = "File disappeared after download"
-            elif file_path.stat().st_size < self.min_file_size:
-                file_path.unlink(missing_ok=True)
-                result["success"] = False
-                result["error"] = f"File too small: {file_path.stat().st_size} bytes"
-            else:
-                dl_result = DownloadResult(
-                    success=True,
-                    file_path=file_path,
-                    size=result.get("size", 0),
-                    resolution=result.get("resolution"),
-                    format_id=result.get("format_id"),
-                    verified=True,
+        last_error = ""
+        for attempt in range(max_retries + 1):
+            if self._shutdown.is_set():
+                self.mark_failed(url, "Download cancelled by shutdown")
+                return DownloadResult(success=False, error="Download cancelled by shutdown")
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(output_dir),
+                    timeout=self.subprocess_timeout,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
-                self.mark_completed(url, dl_result)
-                return dl_result
+            except transient_errors as exc:
+                last_error = str(exc)
+                if attempt < max_retries:
+                    time.sleep(retry_delay * (2 ** attempt))
+                    continue
+                self.mark_failed(url, f"Transient error after {max_retries + 1} attempts: {last_error}")
+                return DownloadResult(success=False, error=f"Transient error after {max_retries + 1} attempts: {last_error}")
+            except subprocess.TimeoutExpired:
+                last_error = f"Timeout after {self.subprocess_timeout}s"
+                if attempt < max_retries:
+                    time.sleep(retry_delay * (2 ** attempt))
+                    continue
+                self.mark_failed(url, last_error)
+                return DownloadResult(success=False, error=last_error)
+            except Exception as exc:
+                self.mark_failed(url, str(exc))
+                return DownloadResult(success=False, error=str(exc))
 
-        error_msg = result.get("error", "Unknown error")
-        self.mark_failed(url, error_msg)
-        return DownloadResult(success=False, error=error_msg)
+            combined = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+            result = self._parse_output(combined, proc.returncode)
+
+            if result.get("success") and result.get("file"):
+                raw = Path(result["file"])
+                file_path = raw if raw.is_absolute() else output_dir / raw
+                if file_path.exists():
+                    result["file"] = str(file_path)
+                    result["size"] = file_path.stat().st_size
+                    if not result.get("resolution"):
+                        result["resolution"] = self._probe_resolution(file_path, self.ffprobe_timeout)
+                else:
+                    found = self._find_output_file(url, output_dir, result.get("file"))
+                    if found:
+                        result["file"] = str(found)
+                        result["size"] = found.stat().st_size
+                        if not result.get("resolution"):
+                            result["resolution"] = self._probe_resolution(found, self.ffprobe_timeout)
+                    else:
+                        result["success"] = False
+                        result["error"] = "Download completed but no output file found"
+
+            if result.get("success") and result.get("file"):
+                file_path = Path(result["file"])
+                if not file_path.exists():
+                    result["success"] = False
+                    result["error"] = "File disappeared after download"
+                elif file_path.stat().st_size < self.min_file_size:
+                    size = file_path.stat().st_size
+                    file_path.unlink(missing_ok=True)
+                    result["success"] = False
+                    result["error"] = f"File too small: {size} bytes"
+                else:
+                    dl_result = DownloadResult(
+                        success=True,
+                        file_path=file_path,
+                        size=result.get("size", 0),
+                        resolution=result.get("resolution"),
+                        format_id=result.get("format_id"),
+                        verified=True,
+                    )
+                    self.mark_completed(url, dl_result)
+                    return dl_result
+
+            error_msg = result.get("error", "Unknown error")
+            self.mark_failed(url, error_msg)
+            return DownloadResult(success=False, error=error_msg)
+
+        self.mark_failed(url, last_error or "Unknown error")
+        return DownloadResult(success=False, error=last_error or "Unknown error")
 
     def _build_command(self, url: str) -> list[str]:
         has_ffmpeg = shutil.which("ffmpeg") is not None
@@ -249,7 +302,14 @@ class DownloaderWrapper:
 
         if returncode == 0:
             lines = output.split("\n")
-            prints = [line for line in lines if line and not line.startswith("[")]
+            prints = [
+                line
+                for line in lines
+                if line.strip()
+                and not line.startswith(
+                    ("[download]", "[ExtractAudio]", "[ffmpeg]", "[Merger]", "[info]", "[error]", "[warning]")
+                )
+            ]
 
             if len(prints) >= 4:
                 result["file"] = "\n".join(prints[:-3]).strip()
@@ -261,11 +321,12 @@ class DownloaderWrapper:
                 result["format_id"] = prints[-1].strip()
             elif len(prints) == 3:
                 result["file"] = prints[0].strip()
-                try:
-                    result["size"] = int(prints[1].strip())
-                except (ValueError, IndexError):
-                    result["resolution"] = prints[1].strip()
                 result["format_id"] = prints[2].strip()
+                middle = prints[1].strip()
+                try:
+                    result["size"] = int(middle)
+                except (ValueError, IndexError):
+                    result["resolution"] = middle
             elif len(prints) == 2:
                 result["file"] = prints[0].strip()
                 try:
@@ -312,10 +373,16 @@ class DownloaderWrapper:
         if output_dir is None:
             output_dir = self.output_dir.resolve()
 
+        def _mtime(p: Path) -> float:
+            try:
+                return p.stat().st_mtime
+            except OSError:
+                return 0.0
+
         try:
             candidates = sorted(
                 output_dir.iterdir(),
-                key=lambda p: p.stat().st_mtime if p.exists() else 0,
+                key=lambda p: _mtime(p) if p.exists() else 0.0,
                 reverse=True,
             )
         except OSError:
@@ -354,7 +421,7 @@ class DownloaderWrapper:
                 if p.exists()
                 and p.suffix in SUPPORTED_EXTENSIONS
                 and url_id in p.name
-                and now - p.stat().st_mtime <= window * 2
+                and now - _mtime(p) <= window * 2
             ]
             if matches:
                 return matches[0]
@@ -362,14 +429,14 @@ class DownloaderWrapper:
         valid = [
             p
             for p in candidates
-            if p.exists() and p.suffix in SUPPORTED_EXTENSIONS and now - p.stat().st_mtime <= window
+            if p.exists() and p.suffix in SUPPORTED_EXTENSIONS and now - _mtime(p) <= window
         ]
         if valid:
             return valid[0]
         return None
 
     @staticmethod
-    def _probe_resolution(file_path: Path) -> Optional[str]:
+    def _probe_resolution(file_path: Path, ffprobe_timeout: int = 10) -> Optional[str]:
         ffprobe = shutil.which("ffprobe")
         if not ffprobe:
             return None
@@ -389,12 +456,12 @@ class DownloaderWrapper:
                 ],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=ffprobe_timeout,
             )
             if result.returncode == 0:
                 res = result.stdout.strip()
                 if res and "x" in res:
                     return res
-        except Exception:
+        except (OSError, subprocess.SubprocessError, ValueError):
             pass
         return None

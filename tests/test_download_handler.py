@@ -36,5 +36,7 @@ def test_url_regex_extract():
     text = (
         "Check this: https://www.instagram.com/reel/ABC123/ and this https://x.com/user/status/123/"
     )
-    matches = _URL_RE.findall(text)
+    matches = [m.group(0) for m in _URL_RE.finditer(text)]
     assert len(matches) == 2
+    assert matches[0] == "https://www.instagram.com/reel/ABC123"
+    assert matches[1] == "https://x.com/user/status/123"

@@ -72,7 +72,7 @@ def test_state_persistence(tmp_dirs):
     )
 
     url = "https://instagram.com/reel/ABC123"
-    wrapper._save_state()
+    wrapper._save_state_snapshot(wrapper._state.copy())
 
     wrapper2 = DownloaderWrapper(
         output_dir=output_dir,
@@ -80,3 +80,11 @@ def test_state_persistence(tmp_dirs):
         concurrent=1,
     )
     assert wrapper2.is_completed(url) is False
+
+    wrapper.mark_completed(url, DownloadResult(success=True, file_path=output_dir / "test.mp4", size=1024))
+    wrapper3 = DownloaderWrapper(
+        output_dir=output_dir,
+        state_file=state_file,
+        concurrent=1,
+    )
+    assert wrapper3.is_completed(url) is True

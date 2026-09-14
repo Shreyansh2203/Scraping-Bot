@@ -8,7 +8,7 @@ from aiogram import Router, types
 from aiogram.types import FSInputFile
 
 from core.config import settings
-from core.downloader_wrapper import DownloaderWrapper
+from core.downloader_wrapper import DownloadResult, DownloaderWrapper
 
 logger = logging.getLogger("bot.handlers.download")
 router = Router()
@@ -19,25 +19,27 @@ _URL_RE = re.compile(
 )
 
 
-@router.message(lambda m: bool(_URL_RE.search(m.text or "")))
+@router.message(lambda m: bool(_URL_RE.search((m.text or m.caption or ""))))
 async def handle_url(message: types.Message, downloader: DownloaderWrapper) -> None:
-    text: Optional[str] = message.text
+    text: Optional[str] = message.text or message.caption
     match = _URL_RE.search(text or "")
     if not match:
         return
     url = match.group(0)
-    status_msg = await message.reply("⏳ Downloading...")
-
+    status_msg: Optional[types.Message] = None
+    result: Optional[DownloadResult] = None
     try:
-        user_id = message.from_user.id if message.from_user else 0
+        status_msg = await message.reply("⏳ Downloading...")
+        user_id = message.from_user.id if message.from_user else message.chat.id
         result = await downloader.download_url(url, user_id)
 
         if result.success and result.file_path and result.file_path.exists():
             size_mb = result.file_path.stat().st_size / (1024 * 1024)
             if size_mb > settings.MAX_FILE_SIZE_MB:
-                await status_msg.edit_text(
-                    f"⚠️ Downloaded, but file is too large for Telegram: {size_mb:.1f} MB"
-                )
+                if status_msg:
+                    await status_msg.edit_text(
+                        f"⚠️ Downloaded, but file is too large for Telegram: {size_mb:.1f} MB"
+                    )
                 result.file_path.unlink(missing_ok=True)
                 return
 
@@ -50,10 +52,15 @@ async def handle_url(message: types.Message, downloader: DownloaderWrapper) -> N
                 caption=caption,
                 disable_content_type_detection=False,
             )
-            await status_msg.edit_text(f"✅ Done ({size_mb:.1f} MB)")
+            if status_msg:
+                await status_msg.edit_text(f"✅ Done ({size_mb:.1f} MB)")
             result.file_path.unlink(missing_ok=True)
         else:
-            await status_msg.edit_text(f"❌ Failed: {result.error or 'Unknown error'}")
+            if status_msg:
+                await status_msg.edit_text(f"❌ Failed: {result.error or 'Unknown error'}")
     except Exception as exc:
         logger.exception("Download failed for %s", url)
-        await status_msg.edit_text(f"❌ Error: {exc}")
+        if status_msg:
+            await status_msg.edit_text(f"❌ Error: {exc}")
+        if result and result.file_path and result.file_path.exists():
+            result.file_path.unlink(missing_ok=True)
