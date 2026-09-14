@@ -31,7 +31,17 @@ python -m bot.main
 
 ## Deployment
 
-See [README_BOT.md](README_BOT.md) for Render deployment instructions.
+On Render, create a Blueprint from this repository using `render.yaml` and set
+`BOT_TOKEN` to your Telegram bot token. The Docker image starts the bot and serves
+`/health` on Render's `PORT` with `HEALTH_BIND=0.0.0.0`.
+
+For an existing Render service, set `HEALTH_BIND=0.0.0.0` in its environment and
+set the health check path to `/health`, then redeploy. A log saying
+`Health server started on 127.0.0.1:8080` followed by `No open ports detected on
+0.0.0.0` means the health server is only listening on localhost.
+
+`PORT` takes precedence over `HEALTH_PORT`; without either setting, the health
+server uses port 8080. Local runs default to `HEALTH_BIND=127.0.0.1`.
 
 ## Development
 

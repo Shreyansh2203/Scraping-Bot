@@ -21,7 +21,9 @@ class Settings:
         self.CONCURRENT_DOWNLOADS: int = self._safe_int(os.getenv("CONCURRENT_DOWNLOADS", "2"), 2)
         self.MAX_FILE_SIZE_MB: int = self._safe_int(os.getenv("MAX_FILE_SIZE_MB", "50"), 50)
         self.ALLOWED_USERS: list[int] = self._parse_allowed_users(os.getenv("ALLOWED_USERS", ""))
-        self.HEALTH_PORT: int = self._safe_int(os.getenv("HEALTH_PORT", "8080"), 8080)
+        self.HEALTH_PORT: int = self._safe_int(
+            os.getenv("PORT", os.getenv("HEALTH_PORT", "8080")), 8080
+        )
         self.HEALTH_BIND: str = os.getenv("HEALTH_BIND", "127.0.0.1")
         self.SUBPROCESS_TIMEOUT: int = self._safe_int(os.getenv("SUBPROCESS_TIMEOUT", "180"), 180)
         self.FFPROBE_TIMEOUT: int = self._safe_int(os.getenv("FFPROBE_TIMEOUT", "10"), 10)

@@ -48,3 +48,34 @@ def test_settings_validation_success(monkeypatch):
     settings = Settings()
 
     settings.validate()  # Should not raise
+
+
+@pytest.mark.parametrize(
+    ("port", "health_port", "expected"),
+    [
+        (None, None, 8080),
+        (None, "8081", 8081),
+        ("10000", None, 10000),
+        ("10000", "8081", 10000),
+    ],
+)
+def test_health_port_precedence(monkeypatch, port, health_port, expected):
+    for name, value in (("PORT", port), ("HEALTH_PORT", health_port)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+    assert Settings().HEALTH_PORT == expected
+
+
+@pytest.mark.parametrize("name", ["PORT", "HEALTH_PORT"])
+@pytest.mark.parametrize("value", ["0", "65536"])
+def test_health_port_validation(monkeypatch, name, value):
+    monkeypatch.setenv("BOT_TOKEN", "123:ABC")
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.delenv("HEALTH_PORT", raising=False)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(RuntimeError, match="HEALTH_PORT must be between 1 and 65535"):
+        Settings().validate()
