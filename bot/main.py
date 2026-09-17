@@ -12,6 +12,7 @@ from typing import Any
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
 from bot.handlers import commands, download
@@ -42,24 +43,17 @@ async def health_handler(request: web.Request) -> web.Response:
         "version": __version__,
         "concurrent": downloader.concurrent,
         "output_dir": str(downloader.output_dir),
-        "state_file": str(downloader.state_file),
     }
     return web.json_response(stats)
 
 
-async def start_health_server(
-    bot: Bot, downloader: DownloaderWrapper, port: int = 8080, bind: str = "0.0.0.0"
-) -> web.AppRunner:
-    app = web.Application()
-    app["downloader"] = downloader
-    app.router.add_get("/health", health_handler)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, bind, port)
-    await site.start()
-    logging.getLogger("bot.main").info("Health server started on %s:%d", bind, port)
-    return runner
+async def on_startup(bot: Bot) -> None:
+    if settings.WEBHOOK_URL:
+        logging.getLogger("bot.main").info("Setting webhook to %s", settings.WEBHOOK_URL)
+        await bot.set_webhook(settings.WEBHOOK_URL, drop_pending_updates=True)
+    else:
+        logging.getLogger("bot.main").info("Deleting webhook for polling")
+        await bot.delete_webhook(drop_pending_updates=True)
 
 
 async def main() -> None:
@@ -81,7 +75,6 @@ async def main() -> None:
 
     downloader = DownloaderWrapper(
         output_dir=settings.DOWNLOAD_DIR,
-        state_file=settings.STATE_FILE,
         concurrent=settings.CONCURRENT_DOWNLOADS,
         subprocess_timeout=settings.SUBPROCESS_TIMEOUT,
         ffprobe_timeout=settings.FFPROBE_TIMEOUT,
@@ -89,20 +82,61 @@ async def main() -> None:
 
     dp = Dispatcher()
     dp["downloader"] = downloader
+    dp.startup.register(on_startup)
     dp.include_router(commands.router)
     dp.include_router(download.router)
     dp.update.middleware(throttle.ThrottleMiddleware())
     dp.update.middleware(throttle.AuthMiddleware())
 
-    runner = await start_health_server(bot, downloader, settings.HEALTH_PORT, settings.HEALTH_BIND)
-    await bot.delete_webhook(drop_pending_updates=True)
-    try:
-        await dp.start_polling(bot)
-    finally:
-        downloader.shutdown()
-        await runner.cleanup()
-        await bot.session.close()
-        file_handler.close()
+    app = web.Application()
+    app["downloader"] = downloader
+    app.router.add_get("/health", health_handler)
+
+    if settings.WEBHOOK_URL:
+        webhook_requests_handler = SimpleRequestHandler(
+            dispatcher=dp,
+            bot=bot,
+        )
+        webhook_requests_handler.register(app, path="/webhook")
+        setup_application(app, dp, bot=bot)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, settings.HEALTH_BIND, settings.HEALTH_PORT)
+        await site.start()
+        logging.getLogger("bot.main").info(
+            "Webhook server started on %s:%d", settings.HEALTH_BIND, settings.HEALTH_PORT
+        )
+
+        # Keep running the aiohttp server until stopped
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            downloader.shutdown()
+            await runner.cleanup()
+            await bot.session.close()
+            file_handler.close()
+
+    else:
+        # Long Polling fallback for local dev
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, settings.HEALTH_BIND, settings.HEALTH_PORT)
+        await site.start()
+        logging.getLogger("bot.main").info(
+            "Health server (polling) started on %s:%d", settings.HEALTH_BIND, settings.HEALTH_PORT
+        )
+
+        try:
+            await dp.start_polling(bot)
+        finally:
+            downloader.shutdown()
+            await runner.cleanup()
+            await bot.session.close()
+            file_handler.close()
 
 
 def _handle_sigterm(signum: int, frame: Any) -> None:

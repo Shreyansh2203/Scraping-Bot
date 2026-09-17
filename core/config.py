@@ -17,7 +17,6 @@ class Settings:
     def __init__(self) -> None:
         self.BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
         self.DOWNLOAD_DIR: Path = Path(os.getenv("DOWNLOAD_DIR", "./downloads"))
-        self.STATE_FILE: Path = Path(os.getenv("STATE_FILE", "./state/bot_state.json"))
         self.CONCURRENT_DOWNLOADS: int = self._safe_int(os.getenv("CONCURRENT_DOWNLOADS", "2"), 2)
         self.MAX_FILE_SIZE_MB: int = self._safe_int(os.getenv("MAX_FILE_SIZE_MB", "50"), 50)
         self.ALLOWED_USERS: list[int] = self._parse_allowed_users(os.getenv("ALLOWED_USERS", ""))
@@ -27,6 +26,13 @@ class Settings:
         self.HEALTH_BIND: str = os.getenv("HEALTH_BIND", "127.0.0.1")
         self.SUBPROCESS_TIMEOUT: int = self._safe_int(os.getenv("SUBPROCESS_TIMEOUT", "180"), 180)
         self.FFPROBE_TIMEOUT: int = self._safe_int(os.getenv("FFPROBE_TIMEOUT", "10"), 10)
+
+        self.RENDER_EXTERNAL_HOSTNAME: str = os.getenv("RENDER_EXTERNAL_HOSTNAME", "")
+        self.WEBHOOK_URL: str = (
+            f"https://{self.RENDER_EXTERNAL_HOSTNAME}/webhook"
+            if self.RENDER_EXTERNAL_HOSTNAME
+            else ""
+        )
 
     @staticmethod
     def _safe_int(value: str, default: int) -> int:

@@ -9,14 +9,12 @@ from core.downloader_wrapper import SUPPORTED_EXTENSIONS, DownloaderWrapper, Dow
 def tmp_dirs(tmp_path):
     output_dir = tmp_path / "downloads"
     output_dir.mkdir()
-    state_file = tmp_path / "state.json"
-    return output_dir, state_file
+    return output_dir
 
 
 def test_normalize_url():
     wrapper = DownloaderWrapper(
         output_dir=Path("downloads"),
-        state_file=Path("state.json"),
     )
 
     assert (
@@ -63,32 +61,3 @@ def test_download_result_success():
     assert result.size == 1024
     assert result.resolution == "1920x1080"
     assert result.verified is True
-
-
-def test_state_persistence(tmp_dirs):
-    output_dir, state_file = tmp_dirs
-    wrapper = DownloaderWrapper(
-        output_dir=output_dir,
-        state_file=state_file,
-        concurrent=1,
-    )
-
-    url = "https://instagram.com/reel/ABC123"
-    wrapper._save_state_snapshot(wrapper._state.copy())
-
-    wrapper2 = DownloaderWrapper(
-        output_dir=output_dir,
-        state_file=state_file,
-        concurrent=1,
-    )
-    assert wrapper2.is_completed(url) is False
-
-    wrapper.mark_completed(
-        url, DownloadResult(success=True, file_paths=[output_dir / "test.mp4"], size=1024)
-    )
-    wrapper3 = DownloaderWrapper(
-        output_dir=output_dir,
-        state_file=state_file,
-        concurrent=1,
-    )
-    assert wrapper3.is_completed(url) is True

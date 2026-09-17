@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-import json
 import logging
 import os
 import re
@@ -13,7 +12,6 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -61,7 +59,6 @@ class DownloaderWrapper:
     def __init__(
         self,
         output_dir: Path,
-        state_file: Path,
         concurrent: int = 2,
         min_file_size: int = DEFAULT_MIN_FILE_SIZE,
         timeout: int = 30,
@@ -69,7 +66,6 @@ class DownloaderWrapper:
         ffprobe_timeout: int = 10,
     ):
         self.output_dir = output_dir
-        self.state_file = state_file
         self.concurrent = concurrent
         self.min_file_size = min_file_size
         self.timeout = timeout
@@ -78,82 +74,19 @@ class DownloaderWrapper:
         self.semaphore = asyncio.Semaphore(concurrent)
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
-        self._state: dict[str, Any] = {"completed": {}, "failed": {}, "meta": {}}
-        self._load_state()
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def _load_state(self) -> None:
-        if not self.state_file.exists():
-            return
-        try:
-            text = self.state_file.read_text(encoding="utf-8")
-            self._state = json.loads(text)
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("State file corrupted (%s), attempting partial recovery.", exc)
-            try:
-                text = self.state_file.read_text(encoding="utf-8")
-                for i in range(len(text) - 1, -1, -1):
-                    if text[i] == "}":
-                        try:
-                            self._state = json.loads(text[: i + 1])
-                            logger.warning("Recovered partial state from %d bytes.", i + 1)
-                            return
-                        except json.JSONDecodeError:
-                            continue
-            except OSError:
-                pass
-            logger.warning("State file unrecoverable, starting fresh.")
-            self._state = {"completed": {}, "failed": {}, "meta": {}}
-
     def is_completed(self, url: str) -> bool:
-        key = self._normalize(url)
-        with self._lock:
-            return key in self._state.get("completed", {})
+        return False
 
     def shutdown(self) -> None:
         self._shutdown.set()
 
     def mark_completed(self, url: str, result: DownloadResult) -> None:
-        key = self._normalize(url)
-        with self._lock:
-            self._state["completed"][key] = {
-                "files": [str(p.resolve()) for p in result.file_paths] if result.file_paths else [],
-                "size": result.size,
-                "resolution": result.resolution,
-                "format_id": result.format_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            self._state.get("failed", {}).pop(key, None)
-            state_snapshot = self._state.copy()
-
-        self._save_state_snapshot(state_snapshot)
+        pass
 
     def mark_failed(self, url: str, error: str) -> None:
-        key = self._normalize(url)
-        with self._lock:
-            self._state.setdefault("failed", {})[key] = {
-                "error": error,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            state_snapshot = self._state.copy()
-
-        self._save_state_snapshot(state_snapshot)
-
-    def _save_state_snapshot(self, state: dict[str, Any]) -> None:
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(
-            dir=str(self.state_file.parent), prefix=".state_", suffix=".tmp"
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2, ensure_ascii=False)
-            os.chmod(tmp_path, 0o600)
-            os.replace(tmp_path, str(self.state_file))
-        except (OSError, TypeError, ValueError):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        pass
 
     @staticmethod
     def _normalize(url: str) -> str:
