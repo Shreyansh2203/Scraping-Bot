@@ -85,8 +85,8 @@ async def main() -> None:
     dp.startup.register(on_startup)
     dp.include_router(commands.router)
     dp.include_router(download.router)
-    dp.update.middleware(throttle.ThrottleMiddleware())
-    dp.update.middleware(throttle.AuthMiddleware())
+    dp.message.middleware(throttle.ThrottleMiddleware())
+    dp.message.middleware(throttle.AuthMiddleware())
 
     app = web.Application()
     app["downloader"] = downloader
