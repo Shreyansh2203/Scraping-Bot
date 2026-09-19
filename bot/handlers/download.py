@@ -43,11 +43,16 @@ async def handle_url(message: types.Message, downloader: DownloaderWrapper) -> N
     if not match:
         return
     url = match.group(0)
+    user_id = message.from_user.id if message.from_user else message.chat.id
+
+    import asyncio
+    asyncio.create_task(_process_download(message, downloader, url, user_id))
+
+async def _process_download(message: types.Message, downloader: DownloaderWrapper, url: str, user_id: int) -> None:
     status_msg: Optional[types.Message] = None
     result: Optional[DownloadResult] = None
     try:
         status_msg = await message.reply("⏳ Downloading...")
-        user_id = message.from_user.id if message.from_user else message.chat.id
         result = await downloader.download_url(url, user_id)
 
         if result.success and result.file_paths:
