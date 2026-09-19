@@ -103,9 +103,9 @@ class DownloaderWrapper:
 
     async def download_url(self, url: str, user_id: int) -> DownloadResult:
         async with self.semaphore:
-            return await asyncio.to_thread(self._download_sync, url, user_id)
+            return await self._download_async(url, user_id)
 
-    def _download_sync(self, url: str, user_id: int) -> DownloadResult:
+    async def _download_async(self, url: str, user_id: int) -> DownloadResult:
         cmd = self._build_command(url)
         output_dir = self.output_dir.resolve()
 
@@ -119,18 +119,30 @@ class DownloaderWrapper:
                 self.mark_failed(url, "Download cancelled by shutdown")
                 return DownloadResult(success=False, error="Download cancelled by shutdown")
             try:
-                proc = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                     cwd=str(output_dir),
-                    timeout=self.subprocess_timeout,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
+                try:
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                        proc.communicate(), timeout=self.subprocess_timeout
+                    )
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+                    raise
+
+                stdout = stdout_bytes.decode(errors="replace")
+                stderr = stderr_bytes.decode(errors="replace")
+                returncode = proc.returncode or 0
+
             except transient_errors as exc:
                 last_error = str(exc)
                 if attempt < max_retries:
-                    time.sleep(retry_delay * (2**attempt))
+                    await asyncio.sleep(retry_delay * (2**attempt))
                     continue
                 self.mark_failed(
                     url, f"Transient error after {max_retries + 1} attempts: {last_error}"
@@ -139,10 +151,10 @@ class DownloaderWrapper:
                     success=False,
                     error=f"Transient error after {max_retries + 1} attempts: {last_error}",
                 )
-            except subprocess.TimeoutExpired:
+            except asyncio.TimeoutError:
                 last_error = f"Timeout after {self.subprocess_timeout}s"
                 if attempt < max_retries:
-                    time.sleep(retry_delay * (2**attempt))
+                    await asyncio.sleep(retry_delay * (2**attempt))
                     continue
                 self.mark_failed(url, last_error)
                 return DownloadResult(success=False, error=last_error)
@@ -150,8 +162,8 @@ class DownloaderWrapper:
                 self.mark_failed(url, str(exc))
                 return DownloadResult(success=False, error=str(exc))
 
-            combined = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
-            result = self._parse_output(combined, proc.returncode)
+            combined = stdout + ("\n" + stderr if stderr else "")
+            result = self._parse_output(combined, returncode)
 
             if result.get("success") and result.get("file"):
                 raw = Path(result["file"])
@@ -160,7 +172,7 @@ class DownloaderWrapper:
                     result["file"] = str(file_path)
                     result["size"] = file_path.stat().st_size
                     if not result.get("resolution"):
-                        result["resolution"] = self._probe_resolution(
+                        result["resolution"] = await self._probe_resolution(
                             file_path, self.ffprobe_timeout
                         )
                 else:
@@ -169,7 +181,7 @@ class DownloaderWrapper:
                         result["file"] = str(found)
                         result["size"] = found.stat().st_size
                         if not result.get("resolution"):
-                            result["resolution"] = self._probe_resolution(
+                            result["resolution"] = await self._probe_resolution(
                                 found, self.ffprobe_timeout
                             )
                     else:
@@ -201,7 +213,7 @@ class DownloaderWrapper:
             error_msg = result.get("error", "Unknown error")
 
             # Fallback to gallery-dl if yt-dlp fails
-            g_result = self._run_gallery_dl(url)
+            g_result = await self._run_gallery_dl(url)
             if g_result.success:
                 self.mark_completed(url, g_result)
                 return g_result
@@ -212,7 +224,7 @@ class DownloaderWrapper:
         self.mark_failed(url, last_error or "Unknown error")
         return DownloadResult(success=False, error=last_error or "Unknown error")
 
-    def _run_gallery_dl(self, url: str) -> DownloadResult:
+    async def _run_gallery_dl(self, url: str) -> DownloadResult:
         output_dir = self.output_dir.resolve()
         with tempfile.TemporaryDirectory(dir=output_dir) as temp_dir:
             cmd = [
@@ -225,21 +237,31 @@ class DownloaderWrapper:
                 url,
             ]
             try:
-                proc = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                     cwd=str(output_dir),
-                    timeout=self.subprocess_timeout,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
+                try:
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                        proc.communicate(), timeout=self.subprocess_timeout
+                    )
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+                    raise
+
+                returncode = proc.returncode or 0
+                stderr = stderr_bytes.decode(errors="replace")
+                stdout = stdout_bytes.decode(errors="replace")
+
             except Exception as exc:
                 return DownloadResult(success=False, error=f"gallery-dl error: {exc}")
 
-            if proc.returncode != 0:
-                return DownloadResult(
-                    success=False, error=f"gallery-dl failed: {proc.stderr or proc.stdout}"
-                )
+            if returncode != 0:
+                return DownloadResult(success=False, error=f"gallery-dl failed: {stderr or stdout}")
 
             downloaded_files = []
             for root, _, files in os.walk(temp_dir):
@@ -461,32 +483,39 @@ class DownloaderWrapper:
         return None
 
     @staticmethod
-    def _probe_resolution(file_path: Path, ffprobe_timeout: int = 10) -> Optional[str]:
+    async def _probe_resolution(file_path: Path, ffprobe_timeout: int = 10) -> Optional[str]:
         ffprobe = shutil.which("ffprobe")
         if not ffprobe:
             return None
         try:
-            result = subprocess.run(
-                [
-                    ffprobe,
-                    "-v",
-                    "error",
-                    "-select_streams",
-                    "v:0",
-                    "-show_entries",
-                    "stream=width,height",
-                    "-of",
-                    "csv=s=x:p=0",
-                    str(file_path),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=ffprobe_timeout,
+            proc = await asyncio.create_subprocess_exec(
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=s=x:p=0",
+                str(file_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            if result.returncode == 0:
-                res = result.stdout.strip()
+            try:
+                stdout_bytes, _ = await asyncio.wait_for(
+                    proc.communicate(), timeout=ffprobe_timeout
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise
+
+            if proc.returncode == 0:
+                res = stdout_bytes.decode(errors="replace").strip()
                 if res and "x" in res:
                     return res
-        except (OSError, subprocess.SubprocessError, ValueError):
+        except Exception:
             pass
         return None

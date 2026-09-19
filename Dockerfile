@@ -12,11 +12,16 @@ RUN groupadd -r botuser && useradd -r -g botuser -d /app botuser
 
 WORKDIR /app
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy package definitions first for better caching
+COPY pyproject.toml README.md ./
+# Also copy the actual code needed for installation
+COPY bot ./bot
+COPY core ./core
 
-# Copy application code
+# Install the application
+RUN pip install --no-cache-dir .
+
+# Copy remaining files
 COPY . .
 
 # Create directories and set ownership

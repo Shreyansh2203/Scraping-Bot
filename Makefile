@@ -13,11 +13,10 @@ help:
 	@echo "  docker-run   - Run Docker container"
 
 install:
-	pip install -r requirements.txt
+	pip install .
 
 dev:
-	pip install -r requirements.txt
-	pip install pytest pytest-asyncio ruff black mypy
+	pip install .[dev]
 
 test:
 	pytest
