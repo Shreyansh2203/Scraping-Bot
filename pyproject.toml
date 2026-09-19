@@ -1,6 +1,6 @@
 [project]
 name = "scraping-bot"
-version = "0.1.0"
+version = "0.2.0"
 description = "Telegram bot for downloading videos from Instagram and Twitter/X"
 readme = "README.md"
 license = { text = "MIT" }
