@@ -161,8 +161,9 @@ def test_find_output_file(tmp_path):
 
 def test_find_output_file_oserror(tmp_path):
     wrapper = DownloaderWrapper(output_dir=tmp_path)
-    with patch.object(Path, "iterdir", side_effect=OSError("Permission denied")):
-        assert wrapper._find_output_file("https://x.com/123", tmp_path) is None
+    mock_dir = MagicMock(spec=Path)
+    mock_dir.iterdir.side_effect = OSError("Permission denied")
+    assert wrapper._find_output_file("https://x.com/123", output_dir=mock_dir) is None
 
 
 async def test_probe_resolution_success(tmp_path):
@@ -268,7 +269,10 @@ async def test_download_async_shutdown(tmp_path):
 async def test_download_async_file_too_small(tmp_path):
     wrapper = DownloaderWrapper(output_dir=tmp_path, min_file_size=5000)
 
-    with patch("asyncio.create_subprocess_exec") as mock_exec:
+    with (
+        patch("asyncio.create_subprocess_exec") as mock_exec,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
         proc = MagicMock()
         proc.communicate = AsyncMock(return_value=(b"small.mp4\n100\n", b""))
         proc.returncode = 0
@@ -289,7 +293,10 @@ async def test_download_async_file_too_small(tmp_path):
 async def test_download_async_ytdlp_fail_gallery_dl_success(tmp_path):
     wrapper = DownloaderWrapper(output_dir=tmp_path)
 
-    with patch("asyncio.create_subprocess_exec") as mock_exec:
+    with (
+        patch("asyncio.create_subprocess_exec") as mock_exec,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
         proc = MagicMock()
         proc.communicate = AsyncMock(return_value=(b"", b"ERROR: Private video"))
         proc.returncode = 1

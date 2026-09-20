@@ -1,4 +1,4 @@
-from pathlib import Path
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +11,7 @@ from bot.handlers.download import (
     active_tasks,
     handle_url,
 )
+from core.config import settings
 from core.downloader_wrapper import DownloaderWrapper, DownloadResult
 
 
@@ -89,7 +90,10 @@ async def test_handle_url_spawns_task(mock_message):
         assert len(active_tasks) == initial_tasks + 1
 
     # Task completes and cleans itself up
-    await list(active_tasks)[-1]
+    tasks = [t for t in active_tasks if not t.done()]
+    if tasks:
+        await asyncio.gather(*tasks)
+    await asyncio.sleep(0)
     assert len(active_tasks) == initial_tasks
 
 
@@ -201,8 +205,8 @@ async def test_process_download_media_group_chunked(mock_message, tmp_path):
 
 
 async def test_process_download_oversized(mock_message, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "MAX_FILE_SIZE_MB", 0)
     big_file = tmp_path / "big.mp4"
-    # Pretend it is 60MB while limit is 50MB
     big_file.write_bytes(b"x" * 100)
 
     status_msg = MagicMock(spec=Message)
@@ -210,15 +214,10 @@ async def test_process_download_oversized(mock_message, tmp_path, monkeypatch):
     mock_message.reply.return_value = status_msg
 
     downloader = MagicMock(spec=DownloaderWrapper)
-    res = DownloadResult(success=True, file_paths=[big_file], size=60 * 1024 * 1024, verified=True)
+    res = DownloadResult(success=True, file_paths=[big_file], size=100, verified=True)
     downloader.download_url = AsyncMock(return_value=res)
 
-    with patch.object(Path, "stat") as mock_stat:
-        mock_stat_res = MagicMock()
-        mock_stat_res.st_size = 60 * 1024 * 1024
-        mock_stat.return_value = mock_stat_res
-
-        await _process_download(mock_message, downloader, "https://x.com/user/status/123", 12345)
+    await _process_download(mock_message, downloader, "https://x.com/user/status/123", 12345)
 
     status_msg.edit_text.assert_called_once()
     assert "maximum allowed size" in status_msg.edit_text.call_args[0][0]

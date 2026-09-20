@@ -147,6 +147,8 @@ async def main() -> None:
             await runner.cleanup()
             await bot.session.close()
             file_handler.close()
+            logging.getLogger().removeHandler(file_handler)
+            logging.getLogger().removeHandler(handler)
 
     else:
         # Long Polling fallback for local dev
@@ -167,6 +169,8 @@ async def main() -> None:
             await runner.cleanup()
             await bot.session.close()
             file_handler.close()
+            logging.getLogger().removeHandler(file_handler)
+            logging.getLogger().removeHandler(handler)
 
 
 def _handle_sigterm(signum: int, frame: Any) -> None:
