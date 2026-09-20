@@ -9,6 +9,7 @@ from bot.handlers.download import (
     _get_media_type,
     _process_download,
     active_tasks,
+    handle_fallback,
     handle_url,
 )
 from core.config import settings
@@ -19,11 +20,15 @@ from core.downloader_wrapper import DownloaderWrapper, DownloadResult
     "url",
     [
         "https://www.instagram.com/reel/ABC123/",
+        "https://www.instagram.com/reels/ABC123/",
         "https://instagram.com/p/ABC123/",
         "https://www.instagram.com/reel/ABC123",
+        "https://www.instagram.com/share/reel/ABC123/",
+        "https://www.instagram.com/tv/ABC123/",
         "https://x.com/user/status/1234567890",
         "https://twitter.com/user/status/1234567890",
         "https://x.com/user/status/1234567890/",
+        "https://x.com/i/status/1234567890",
     ],
 )
 def test_url_regex_valid(url):
@@ -263,3 +268,9 @@ async def test_process_download_missing_files_on_disk(mock_message, tmp_path):
     await _process_download(mock_message, downloader, "https://x.com/user/status/123", 12345)
 
     status_msg.edit_text.assert_called_once_with("❌ Downloaded file could not be found on disk.")
+
+
+async def test_handle_fallback(mock_message):
+    await handle_fallback(mock_message)
+    mock_message.reply.assert_called_once()
+    assert "Send me an Instagram or Twitter/X link" in mock_message.reply.call_args[0][0]

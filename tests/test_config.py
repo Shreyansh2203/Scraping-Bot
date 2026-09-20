@@ -41,6 +41,19 @@ def test_settings_from_env(monkeypatch):
     assert settings.WEBHOOK_URL == "https://my-bot.onrender.com/webhook"
 
 
+def test_settings_bot_mode_polling(monkeypatch):
+    monkeypatch.setenv("RENDER_EXTERNAL_HOSTNAME", "my-bot.onrender.com")
+    monkeypatch.setenv("BOT_MODE", "polling")
+    settings = Settings()
+    assert settings.WEBHOOK_URL == ""
+
+
+def test_settings_explicit_webhook_url(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_URL", "https://custom.domain.com/webhook")
+    settings = Settings()
+    assert settings.WEBHOOK_URL == "https://custom.domain.com/webhook"
+
+
 def test_settings_safe_int_fallback(monkeypatch, caplog):
     monkeypatch.setenv("CONCURRENT_DOWNLOADS", "invalid_number")
     with caplog.at_level(logging.WARNING):

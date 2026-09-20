@@ -24,7 +24,7 @@ router = Router()
 active_tasks: set[asyncio.Task[Any]] = set()
 
 _URL_RE = re.compile(
-    r"https?://(www\.)?(instagram\.com/(reel|p)/[^/\s?]+|x\.com/[^/\s]+/status/\d+|twitter\.com/[^/\s]+/status/\d+)",
+    r"https?://(?:www\.)?(?:instagram\.com/(?:(?:share/)?(?:reel|reels|p|tv)/[^/\s?]+)|(?:x|twitter)\.com/(?:[^/\s]+/status/\d+|i/status/\d+))",
     re.IGNORECASE,
 )
 
@@ -150,3 +150,10 @@ async def _process_download(
     finally:
         if result:
             result.cleanup()
+
+
+@router.message()
+async def handle_fallback(message: types.Message) -> None:
+    await message.reply(
+        "👋 Send me an Instagram or Twitter/X link to download media, or /help for more info."
+    )

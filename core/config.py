@@ -27,12 +27,16 @@ class Settings:
         self.SUBPROCESS_TIMEOUT: int = self._safe_int(os.getenv("SUBPROCESS_TIMEOUT", "180"), 180)
         self.FFPROBE_TIMEOUT: int = self._safe_int(os.getenv("FFPROBE_TIMEOUT", "10"), 10)
 
+        self.BOT_MODE: str = os.getenv("BOT_MODE", "").lower()
         self.RENDER_EXTERNAL_HOSTNAME: str = os.getenv("RENDER_EXTERNAL_HOSTNAME", "")
-        self.WEBHOOK_URL: str = (
-            f"https://{self.RENDER_EXTERNAL_HOSTNAME}/webhook"
-            if self.RENDER_EXTERNAL_HOSTNAME
-            else ""
-        )
+        if self.BOT_MODE == "polling":
+            self.WEBHOOK_URL: str = ""
+        else:
+            self.WEBHOOK_URL = os.getenv("WEBHOOK_URL") or (
+                f"https://{self.RENDER_EXTERNAL_HOSTNAME}/webhook"
+                if self.RENDER_EXTERNAL_HOSTNAME
+                else ""
+            )
 
     @staticmethod
     def _safe_int(value: str, default: int) -> int:
