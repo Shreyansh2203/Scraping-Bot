@@ -74,10 +74,10 @@ async def metrics_handler(request: web.Request) -> web.Response:
 async def on_startup(bot: Bot) -> None:
     if settings.WEBHOOK_URL:
         logging.getLogger("bot.main").info("Setting webhook to %s", settings.WEBHOOK_URL)
-        await bot.set_webhook(settings.WEBHOOK_URL, drop_pending_updates=True)
+        await bot.set_webhook(settings.WEBHOOK_URL, drop_pending_updates=False)
     else:
         logging.getLogger("bot.main").info("Deleting webhook for polling")
-        await bot.delete_webhook(drop_pending_updates=True)
+        await bot.delete_webhook(drop_pending_updates=False)
 
 
 async def main() -> None:

@@ -104,7 +104,7 @@ async def test_on_startup_webhook(monkeypatch):
 
     await on_startup(bot)
     bot.set_webhook.assert_called_once_with(
-        "https://example.com/webhook", drop_pending_updates=True
+        "https://example.com/webhook", drop_pending_updates=False
     )
 
 
@@ -114,7 +114,7 @@ async def test_on_startup_polling(monkeypatch):
     bot.delete_webhook = AsyncMock()
 
     await on_startup(bot)
-    bot.delete_webhook.assert_called_once_with(drop_pending_updates=True)
+    bot.delete_webhook.assert_called_once_with(drop_pending_updates=False)
 
 
 def test_handle_sigterm():
