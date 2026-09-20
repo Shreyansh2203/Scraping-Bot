@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import re
 from typing import Any, Optional
@@ -82,7 +83,8 @@ async def _process_download(
                     )
                 return
 
-            caption = f"<code>{url}</code>\n" f"Total Size: {total_size_mb:.1f} MB" + (
+            escaped_url = html.escape(url)
+            caption = f"<code>{escaped_url}</code>\n" f"Total Size: {total_size_mb:.1f} MB" + (
                 f"\nResolution: {result.resolution}" if result.resolution else ""
             )
 
