@@ -114,21 +114,22 @@ async def _process_download(
                         media_type = _get_media_type(p.name)
                         fs_file = FSInputFile(p)
 
+                        item_caption = (
+                            f"{caption} (Part {chunk_idx + 1}/{len(chunks)})"
+                            if (idx == 0 and len(chunks) > 1)
+                            else (caption if idx == 0 else None)
+                        )
+
                         media: Any
                         if media_type == "photo":
-                            media = InputMediaPhoto(media=fs_file)
+                            media = InputMediaPhoto(media=fs_file, caption=item_caption)
                         elif media_type == "video":
-                            media = InputMediaVideo(media=fs_file)
+                            media = InputMediaVideo(media=fs_file, caption=item_caption)
                         elif media_type == "audio":
-                            media = InputMediaAudio(media=fs_file)
+                            media = InputMediaAudio(media=fs_file, caption=item_caption)
                         else:
-                            media = InputMediaDocument(media=fs_file)
+                            media = InputMediaDocument(media=fs_file, caption=item_caption)
 
-                        if idx == 0:
-                            part_info = (
-                                f" (Part {chunk_idx + 1}/{len(chunks)})" if len(chunks) > 1 else ""
-                            )
-                            media.caption = f"{caption}{part_info}"
                         media_group.append(media)
 
                     await message.reply_media_group(media=media_group)
