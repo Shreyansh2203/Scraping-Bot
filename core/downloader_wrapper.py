@@ -8,9 +8,8 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
-import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -49,10 +48,18 @@ class DownloadResult:
     format_id: Optional[str] = None
     error: Optional[str] = None
     verified: bool = False
+    job_dir: Optional[Path] = None
 
     @property
     def file_path(self) -> Optional[Path]:
         return self.file_paths[0] if self.file_paths else None
+
+    def cleanup(self) -> None:
+        """Remove job directory and all downloaded files."""
+        if self.job_dir and self.job_dir.exists():
+            shutil.rmtree(self.job_dir, ignore_errors=True)
+        for p in self.file_paths:
+            p.unlink(missing_ok=True)
 
 
 class DownloaderWrapper:
@@ -72,21 +79,11 @@ class DownloaderWrapper:
         self.subprocess_timeout = subprocess_timeout
         self.ffprobe_timeout = ffprobe_timeout
         self.semaphore = asyncio.Semaphore(concurrent)
-        self._lock = threading.Lock()
-        self._shutdown = threading.Event()
+        self._shutdown = asyncio.Event()
         self.output_dir.mkdir(parents=True, exist_ok=True)
-
-    def is_completed(self, url: str) -> bool:
-        return False
 
     def shutdown(self) -> None:
         self._shutdown.set()
-
-    def mark_completed(self, url: str, result: DownloadResult) -> None:
-        pass
-
-    def mark_failed(self, url: str, error: str) -> None:
-        pass
 
     @staticmethod
     def _normalize(url: str) -> str:
@@ -106,184 +103,179 @@ class DownloaderWrapper:
             return await self._download_async(url, user_id)
 
     async def _download_async(self, url: str, user_id: int) -> DownloadResult:
-        cmd = self._build_command(url)
-        output_dir = self.output_dir.resolve()
+        job_id = uuid.uuid4().hex[:12]
+        job_dir = (self.output_dir / f"job_{job_id}").resolve()
+        job_dir.mkdir(parents=True, exist_ok=True)
 
         max_retries = 2
         retry_delay = 1.0
         transient_errors = (TimeoutError, OSError, ConnectionError)
-
         last_error = ""
-        for attempt in range(max_retries + 1):
-            if self._shutdown.is_set():
-                self.mark_failed(url, "Download cancelled by shutdown")
-                return DownloadResult(success=False, error="Download cancelled by shutdown")
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=str(output_dir),
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
+
+        try:
+            for attempt in range(max_retries + 1):
+                if self._shutdown.is_set():
+                    shutil.rmtree(job_dir, ignore_errors=True)
+                    return DownloadResult(success=False, error="Download cancelled by shutdown")
+
+                cmd = self._build_command(url)
                 try:
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                        proc.communicate(), timeout=self.subprocess_timeout
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        cwd=str(job_dir),
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                     )
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-                    raise
-
-                stdout = stdout_bytes.decode(errors="replace")
-                stderr = stderr_bytes.decode(errors="replace")
-                returncode = proc.returncode or 0
-
-            except transient_errors as exc:
-                last_error = str(exc)
-                if attempt < max_retries:
-                    await asyncio.sleep(retry_delay * (2**attempt))
-                    continue
-                self.mark_failed(
-                    url, f"Transient error after {max_retries + 1} attempts: {last_error}"
-                )
-                return DownloadResult(
-                    success=False,
-                    error=f"Transient error after {max_retries + 1} attempts: {last_error}",
-                )
-            except asyncio.TimeoutError:
-                last_error = f"Timeout after {self.subprocess_timeout}s"
-                if attempt < max_retries:
-                    await asyncio.sleep(retry_delay * (2**attempt))
-                    continue
-                self.mark_failed(url, last_error)
-                return DownloadResult(success=False, error=last_error)
-            except Exception as exc:
-                self.mark_failed(url, str(exc))
-                return DownloadResult(success=False, error=str(exc))
-
-            combined = stdout + ("\n" + stderr if stderr else "")
-            result = self._parse_output(combined, returncode)
-
-            if result.get("success") and result.get("file"):
-                raw = Path(result["file"])
-                file_path = raw if raw.is_absolute() else output_dir / raw
-                if file_path.exists():
-                    result["file"] = str(file_path)
-                    result["size"] = file_path.stat().st_size
-                    if not result.get("resolution"):
-                        result["resolution"] = await self._probe_resolution(
-                            file_path, self.ffprobe_timeout
+                    try:
+                        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                            proc.communicate(), timeout=self.subprocess_timeout
                         )
-                else:
-                    found = self._find_output_file(url, output_dir, result.get("file"))
-                    if found:
-                        result["file"] = str(found)
-                        result["size"] = found.stat().st_size
+                    except TimeoutError:
+                        proc.kill()
+                        await proc.wait()
+                        raise
+
+                    stdout = stdout_bytes.decode(errors="replace")
+                    stderr = stderr_bytes.decode(errors="replace")
+                    returncode = proc.returncode or 0
+
+                except transient_errors as exc:
+                    last_error = str(exc)
+                    if attempt < max_retries:
+                        await asyncio.sleep(retry_delay * (2**attempt))
+                        continue
+                    shutil.rmtree(job_dir, ignore_errors=True)
+                    return DownloadResult(
+                        success=False,
+                        error=f"Transient error after {max_retries + 1} attempts: {last_error}",
+                    )
+                except Exception as exc:
+                    shutil.rmtree(job_dir, ignore_errors=True)
+                    return DownloadResult(success=False, error=str(exc))
+
+                combined = stdout + ("\n" + stderr if stderr else "")
+                result = self._parse_output(combined, returncode)
+
+                if result.get("success") and result.get("file"):
+                    raw = Path(result["file"])
+                    file_path = raw if raw.is_absolute() else job_dir / raw
+                    if not file_path.exists():
+                        found = self._find_output_file(url, job_dir, result.get("file"))
+                        if found:
+                            file_path = found
+                        else:
+                            result["success"] = False
+                            result["error"] = "Download completed but no output file found"
+
+                    if file_path.exists():
+                        result["file"] = str(file_path)
+                        result["size"] = file_path.stat().st_size
                         if not result.get("resolution"):
                             result["resolution"] = await self._probe_resolution(
-                                found, self.ffprobe_timeout
+                                file_path, self.ffprobe_timeout
                             )
-                    else:
-                        result["success"] = False
-                        result["error"] = "Download completed but no output file found"
 
-            if result.get("success") and result.get("file"):
-                file_path = Path(result["file"])
-                if not file_path.exists():
-                    result["success"] = False
-                    result["error"] = "File disappeared after download"
-                elif file_path.stat().st_size < self.min_file_size:
-                    size = file_path.stat().st_size
-                    file_path.unlink(missing_ok=True)
-                    result["success"] = False
-                    result["error"] = f"File too small: {size} bytes"
-                else:
-                    dl_result = DownloadResult(
-                        success=True,
-                        file_paths=[file_path],
-                        size=result.get("size", 0),
-                        resolution=result.get("resolution"),
-                        format_id=result.get("format_id"),
-                        verified=True,
-                    )
-                    self.mark_completed(url, dl_result)
-                    return dl_result
+                        if result["size"] < self.min_file_size:
+                            file_path.unlink(missing_ok=True)
+                            result["success"] = False
+                            result["error"] = f"File too small: {result['size']} bytes"
+                        else:
+                            return DownloadResult(
+                                success=True,
+                                file_paths=[file_path],
+                                size=result["size"],
+                                resolution=result.get("resolution"),
+                                format_id=result.get("format_id"),
+                                verified=True,
+                                job_dir=job_dir,
+                            )
 
-            error_msg = result.get("error", "Unknown error")
+                last_error = result.get("error", "Unknown error")
+                if attempt < max_retries:
+                    await asyncio.sleep(retry_delay * (2**attempt))
+                    continue
 
-            # Fallback to gallery-dl if yt-dlp fails
-            g_result = await self._run_gallery_dl(url)
+            # Fallback to gallery-dl if yt-dlp attempts fail
+            g_result = await self._run_gallery_dl(url, job_dir)
             if g_result.success:
-                self.mark_completed(url, g_result)
+                g_result.job_dir = job_dir
                 return g_result
 
-            self.mark_failed(url, error_msg)
-            return DownloadResult(success=False, error=error_msg)
+            shutil.rmtree(job_dir, ignore_errors=True)
+            return DownloadResult(
+                success=False, error=last_error or g_result.error or "Download failed"
+            )
 
-        self.mark_failed(url, last_error or "Unknown error")
-        return DownloadResult(success=False, error=last_error or "Unknown error")
+        except Exception as exc:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            return DownloadResult(success=False, error=str(exc))
 
-    async def _run_gallery_dl(self, url: str) -> DownloadResult:
-        output_dir = self.output_dir.resolve()
-        with tempfile.TemporaryDirectory(dir=output_dir) as temp_dir:
-            cmd = [
-                sys.executable,
-                "-m",
-                "gallery_dl",
-                "--directory",
-                temp_dir,
-                "-q",
-                url,
-            ]
+    async def _run_gallery_dl(self, url: str, job_dir: Path) -> DownloadResult:
+        cmd = [
+            sys.executable,
+            "-m",
+            "gallery_dl",
+            "--directory",
+            str(job_dir),
+            "-q",
+            url,
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(job_dir),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=str(output_dir),
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    proc.communicate(), timeout=self.subprocess_timeout
                 )
-                try:
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                        proc.communicate(), timeout=self.subprocess_timeout
-                    )
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-                    raise
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise
 
-                returncode = proc.returncode or 0
-                stderr = stderr_bytes.decode(errors="replace")
-                stdout = stdout_bytes.decode(errors="replace")
+            returncode = proc.returncode or 0
+            stderr = stderr_bytes.decode(errors="replace")
+            stdout = stdout_bytes.decode(errors="replace")
 
-            except Exception as exc:
-                return DownloadResult(success=False, error=f"gallery-dl error: {exc}")
+        except Exception as exc:
+            return DownloadResult(success=False, error=f"gallery-dl error: {exc}")
 
-            if returncode != 0:
-                return DownloadResult(success=False, error=f"gallery-dl failed: {stderr or stdout}")
+        if returncode != 0:
+            return DownloadResult(success=False, error=f"gallery-dl failed: {stderr or stdout}")
 
-            downloaded_files = []
-            for root, _, files in os.walk(temp_dir):
-                for file in files:
-                    file_path = Path(root) / file
-                    if file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
-                        dest = output_dir / file_path.name
+        downloaded_files: list[Path] = []
+        for root, _, files in os.walk(job_dir):
+            for file in files:
+                file_path = Path(root) / file
+                if file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
+                    if file_path.parent != job_dir:
+                        dest = job_dir / file_path.name
                         counter = 1
                         while dest.exists():
-                            dest = output_dir / f"{file_path.stem}_{counter}{file_path.suffix}"
+                            dest = job_dir / f"{file_path.stem}_{counter}{file_path.suffix}"
                             counter += 1
                         shutil.move(str(file_path), str(dest))
                         downloaded_files.append(dest)
+                    else:
+                        downloaded_files.append(file_path)
 
-            if not downloaded_files:
-                return DownloadResult(success=False, error="gallery-dl returned no supported files")
+        if not downloaded_files:
+            return DownloadResult(success=False, error="gallery-dl returned no supported files")
 
-            total_size = sum(f.stat().st_size for f in downloaded_files if f.exists())
+        total_size = sum(f.stat().st_size for f in downloaded_files if f.exists())
 
-            return DownloadResult(
-                success=True, file_paths=downloaded_files, size=total_size, verified=True
-            )
+        return DownloadResult(
+            success=True,
+            file_paths=downloaded_files,
+            size=total_size,
+            verified=True,
+            job_dir=job_dir,
+        )
 
     def _build_command(self, url: str) -> list[str]:
         has_ffmpeg = shutil.which("ffmpeg") is not None
@@ -507,7 +499,7 @@ class DownloaderWrapper:
                 stdout_bytes, _ = await asyncio.wait_for(
                     proc.communicate(), timeout=ffprobe_timeout
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
                 await proc.wait()
                 raise

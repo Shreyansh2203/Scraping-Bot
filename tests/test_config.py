@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from core.config import Settings
@@ -6,10 +8,12 @@ from core.config import Settings
 def test_settings_defaults(monkeypatch):
     monkeypatch.delenv("BOT_TOKEN", raising=False)
     monkeypatch.delenv("DOWNLOAD_DIR", raising=False)
-    monkeypatch.delenv("STATE_FILE", raising=False)
     monkeypatch.delenv("CONCURRENT_DOWNLOADS", raising=False)
     monkeypatch.delenv("MAX_FILE_SIZE_MB", raising=False)
     monkeypatch.delenv("ALLOWED_USERS", raising=False)
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.delenv("HEALTH_PORT", raising=False)
+    monkeypatch.delenv("RENDER_EXTERNAL_HOSTNAME", raising=False)
 
     settings = Settings()
 
@@ -17,15 +21,16 @@ def test_settings_defaults(monkeypatch):
     assert settings.CONCURRENT_DOWNLOADS == 2
     assert settings.MAX_FILE_SIZE_MB == 50
     assert settings.ALLOWED_USERS == []
+    assert settings.WEBHOOK_URL == ""
 
 
 def test_settings_from_env(monkeypatch):
     monkeypatch.setenv("BOT_TOKEN", "123:ABC")
     monkeypatch.setenv("DOWNLOAD_DIR", "/tmp/downloads")
-    monkeypatch.setenv("STATE_FILE", "/tmp/state.json")
     monkeypatch.setenv("CONCURRENT_DOWNLOADS", "5")
     monkeypatch.setenv("MAX_FILE_SIZE_MB", "100")
     monkeypatch.setenv("ALLOWED_USERS", "123,456")
+    monkeypatch.setenv("RENDER_EXTERNAL_HOSTNAME", "my-bot.onrender.com")
 
     settings = Settings()
 
@@ -33,21 +38,51 @@ def test_settings_from_env(monkeypatch):
     assert settings.CONCURRENT_DOWNLOADS == 5
     assert settings.MAX_FILE_SIZE_MB == 100
     assert settings.ALLOWED_USERS == [123, 456]
+    assert settings.WEBHOOK_URL == "https://my-bot.onrender.com/webhook"
 
 
-def test_settings_validation(monkeypatch):
+def test_settings_safe_int_fallback(monkeypatch, caplog):
+    monkeypatch.setenv("CONCURRENT_DOWNLOADS", "invalid_number")
+    with caplog.at_level(logging.WARNING):
+        settings = Settings()
+        assert settings.CONCURRENT_DOWNLOADS == 2
+    assert "Invalid integer value 'invalid_number'" in caplog.text
+
+
+def test_settings_parse_allowed_users_with_invalid(monkeypatch, caplog):
+    monkeypatch.setenv("ALLOWED_USERS", "123, invalid_id, 456")
+    with caplog.at_level(logging.WARNING):
+        settings = Settings()
+        assert settings.ALLOWED_USERS == [123, 456]
+    assert "Invalid user ID 'invalid_id'" in caplog.text
+
+
+def test_settings_validation_errors(monkeypatch):
     monkeypatch.setenv("BOT_TOKEN", "")
     settings = Settings()
-
     with pytest.raises(RuntimeError, match="BOT_TOKEN is not set"):
         settings.validate()
 
-
-def test_settings_validation_success(monkeypatch):
     monkeypatch.setenv("BOT_TOKEN", "123:ABC")
+    monkeypatch.setenv("CONCURRENT_DOWNLOADS", "0")
     settings = Settings()
+    with pytest.raises(RuntimeError, match="CONCURRENT_DOWNLOADS must be >= 1"):
+        settings.validate()
 
-    settings.validate()  # Should not raise
+    monkeypatch.setenv("CONCURRENT_DOWNLOADS", "2")
+    monkeypatch.setenv("MAX_FILE_SIZE_MB", "0")
+    settings = Settings()
+    with pytest.raises(RuntimeError, match="MAX_FILE_SIZE_MB must be >= 1"):
+        settings.validate()
+
+
+def test_settings_validation_public_bot_warning(monkeypatch, caplog):
+    monkeypatch.setenv("BOT_TOKEN", "123:ABC")
+    monkeypatch.delenv("ALLOWED_USERS", raising=False)
+    settings = Settings()
+    with caplog.at_level(logging.WARNING):
+        settings.validate()
+    assert "ALLOWED_USERS is empty; bot is public" in caplog.text
 
 
 @pytest.mark.parametrize(

@@ -5,6 +5,7 @@ import json
 import logging
 import signal
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from core.config import settings
 from core.downloader_wrapper import DownloaderWrapper
 
 __version__ = "0.1.0"
+_start_time = time.time()
 
 
 class JsonFormatter(logging.Formatter):
@@ -41,10 +43,32 @@ async def health_handler(request: web.Request) -> web.Response:
     stats = {
         "status": "ok",
         "version": __version__,
+        "uptime_seconds": int(time.time() - _start_time),
         "concurrent": downloader.concurrent,
+        "active_downloads": len(download.active_tasks),
         "output_dir": str(downloader.output_dir),
     }
     return web.json_response(stats)
+
+
+async def metrics_handler(request: web.Request) -> web.Response:
+    """Prometheus-compatible plain text metrics endpoint."""
+    downloader: DownloaderWrapper = request.app["downloader"]
+    uptime = time.time() - _start_time
+    active = len(download.active_tasks)
+
+    lines = [
+        "# HELP scraping_bot_uptime_seconds Bot uptime in seconds.",
+        "# TYPE scraping_bot_uptime_seconds gauge",
+        f"scraping_bot_uptime_seconds {uptime:.2f}",
+        "# HELP scraping_bot_active_downloads Currently active download tasks.",
+        "# TYPE scraping_bot_active_downloads gauge",
+        f"scraping_bot_active_downloads {active}",
+        "# HELP scraping_bot_concurrent_limit Maximum concurrent downloads configured.",
+        "# TYPE scraping_bot_concurrent_limit gauge",
+        f"scraping_bot_concurrent_limit {downloader.concurrent}",
+    ]
+    return web.Response(text="\n".join(lines) + "\n", content_type="text/plain; version=0.0.4")
 
 
 async def on_startup(bot: Bot) -> None:
@@ -85,12 +109,15 @@ async def main() -> None:
     dp.startup.register(on_startup)
     dp.include_router(commands.router)
     dp.include_router(download.router)
-    dp.message.middleware(throttle.ThrottleMiddleware())
+
+    # Register Auth before Throttle
     dp.message.middleware(throttle.AuthMiddleware())
+    dp.message.middleware(throttle.ThrottleMiddleware())
 
     app = web.Application()
     app["downloader"] = downloader
     app.router.add_get("/health", health_handler)
+    app.router.add_get("/metrics", metrics_handler)
 
     if settings.WEBHOOK_URL:
         webhook_requests_handler = SimpleRequestHandler(
@@ -108,7 +135,6 @@ async def main() -> None:
             "Webhook server started on %s:%d", settings.HEALTH_BIND, settings.HEALTH_PORT
         )
 
-        # Keep running the aiohttp server until stopped
         try:
             while True:
                 await asyncio.sleep(3600)
@@ -116,6 +142,8 @@ async def main() -> None:
             pass
         finally:
             downloader.shutdown()
+            if download.active_tasks:
+                await asyncio.wait(download.active_tasks, timeout=5)
             await runner.cleanup()
             await bot.session.close()
             file_handler.close()
@@ -134,6 +162,8 @@ async def main() -> None:
             await dp.start_polling(bot)
         finally:
             downloader.shutdown()
+            if download.active_tasks:
+                await asyncio.wait(download.active_tasks, timeout=5)
             await runner.cleanup()
             await bot.session.close()
             file_handler.close()
