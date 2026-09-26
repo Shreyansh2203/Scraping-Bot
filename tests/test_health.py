@@ -1,14 +1,17 @@
+import importlib.metadata
 import json
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram import Bot
 
 from bot.main import (
+    DOWNLOADER_KEY,
     JsonFormatter,
     __version__,
     _handle_sigterm,
+    _resolve_version,
     health_handler,
     metrics_handler,
     on_startup,
@@ -25,11 +28,15 @@ def mock_downloader(tmp_path):
     return FakeDownloader()
 
 
-async def test_health_handler(mock_downloader):
+@pytest.fixture
+def mock_request(mock_downloader):
     request = type("Request", (), {})()
-    request.app = {"downloader": mock_downloader}
+    request.app = {DOWNLOADER_KEY: mock_downloader}
+    return request
 
-    response = await health_handler(request)
+
+async def test_health_handler(mock_request):
+    response = await health_handler(mock_request)
     assert response.status == 200
 
     data = json.loads(response.body.decode())
@@ -41,16 +48,38 @@ async def test_health_handler(mock_downloader):
     assert "active_downloads" in data
 
 
-async def test_metrics_handler(mock_downloader):
-    request = type("Request", (), {})()
-    request.app = {"downloader": mock_downloader}
-
-    response = await metrics_handler(request)
+async def test_metrics_handler(mock_request):
+    response = await metrics_handler(mock_request)
     assert response.status == 200
     text = response.text
     assert "scraping_bot_uptime_seconds" in text
     assert "scraping_bot_active_downloads" in text
     assert "scraping_bot_concurrent_limit 2" in text
+
+
+async def test_uptime_is_measured_with_a_monotonic_clock(mock_request, monkeypatch):
+    monkeypatch.setattr("bot.main._start_time", 500.0)
+
+    with patch("bot.main.time.monotonic", return_value=560.0):
+        health_data = json.loads((await health_handler(mock_request)).body.decode())
+        metrics_text = (await metrics_handler(mock_request)).text
+
+    assert health_data["uptime_seconds"] == 60
+    assert "scraping_bot_uptime_seconds 60.00" in metrics_text
+
+
+def test_version_is_read_from_package_metadata():
+    with patch("importlib.metadata.version", return_value="9.9.9") as mock_version:
+        assert _resolve_version() == "9.9.9"
+    mock_version.assert_called_once_with("scraping-bot")
+
+    with patch(
+        "importlib.metadata.version",
+        side_effect=importlib.metadata.PackageNotFoundError("scraping-bot"),
+    ):
+        assert _resolve_version() == "0.0.0+unknown"
+
+    assert __version__ == _resolve_version()
 
 
 def test_json_formatter():

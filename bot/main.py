@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import json
 import logging
 import signal
 import sys
 import time
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,8 +23,18 @@ from bot.middlewares import throttle
 from core.config import settings
 from core.downloader_wrapper import DownloaderWrapper
 
-__version__ = "0.1.0"
-_start_time = time.time()
+
+def _resolve_version() -> str:
+    try:
+        return importlib.metadata.version("scraping-bot")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0+unknown"
+
+
+__version__ = _resolve_version()
+_start_time = time.monotonic()
+
+DOWNLOADER_KEY: web.AppKey[DownloaderWrapper] = web.AppKey("downloader")
 
 
 class JsonFormatter(logging.Formatter):
@@ -39,11 +51,11 @@ class JsonFormatter(logging.Formatter):
 
 
 async def health_handler(request: web.Request) -> web.Response:
-    downloader: DownloaderWrapper = request.app["downloader"]
+    downloader = request.app[DOWNLOADER_KEY]
     stats = {
         "status": "ok",
         "version": __version__,
-        "uptime_seconds": int(time.time() - _start_time),
+        "uptime_seconds": int(time.monotonic() - _start_time),
         "concurrent": downloader.concurrent,
         "active_downloads": len(download.active_tasks),
         "output_dir": str(downloader.output_dir),
@@ -53,8 +65,8 @@ async def health_handler(request: web.Request) -> web.Response:
 
 async def metrics_handler(request: web.Request) -> web.Response:
     """Prometheus-compatible plain text metrics endpoint."""
-    downloader: DownloaderWrapper = request.app["downloader"]
-    uptime = time.time() - _start_time
+    downloader = request.app[DOWNLOADER_KEY]
+    uptime = time.monotonic() - _start_time
     active = len(download.active_tasks)
 
     lines = [
@@ -78,6 +90,22 @@ async def on_startup(bot: Bot) -> None:
     else:
         logging.getLogger("bot.main").info("Deleting webhook for polling")
         await bot.delete_webhook(drop_pending_updates=False)
+
+
+async def _shutdown(
+    downloader: DownloaderWrapper,
+    runner: web.AppRunner,
+    bot: Bot,
+    log_handlers: tuple[logging.Handler, ...],
+) -> None:
+    downloader.shutdown()
+    if download.active_tasks:
+        await asyncio.wait(download.active_tasks, timeout=5)
+    await runner.cleanup()
+    await bot.session.close()
+    for log_handler in log_handlers:
+        log_handler.close()
+        logging.getLogger().removeHandler(log_handler)
 
 
 async def main() -> None:
@@ -115,11 +143,12 @@ async def main() -> None:
     dp.message.middleware(throttle.ThrottleMiddleware())
 
     app = web.Application()
-    app["downloader"] = downloader
+    app[DOWNLOADER_KEY] = downloader
     app.router.add_get("/health", health_handler)
     app.router.add_get("/metrics", metrics_handler)
 
-    if settings.WEBHOOK_URL:
+    use_webhook = bool(settings.WEBHOOK_URL)
+    if use_webhook:
         webhook_requests_handler = SimpleRequestHandler(
             dispatcher=dp,
             bot=bot,
@@ -127,50 +156,26 @@ async def main() -> None:
         webhook_requests_handler.register(app, path="/webhook")
         setup_application(app, dp, bot=bot)
 
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, settings.HEALTH_BIND, settings.HEALTH_PORT)
-        await site.start()
-        logging.getLogger("bot.main").info(
-            "Webhook server started on %s:%d", settings.HEALTH_BIND, settings.HEALTH_PORT
-        )
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, settings.HEALTH_BIND, settings.HEALTH_PORT)
+    await site.start()
+    logging.getLogger("bot.main").info(
+        "Health server started on %s:%d (%s mode)",
+        settings.HEALTH_BIND,
+        settings.HEALTH_PORT,
+        "webhook" if use_webhook else "polling",
+    )
 
-        try:
-            while True:
-                await asyncio.sleep(3600)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            downloader.shutdown()
-            if download.active_tasks:
-                await asyncio.wait(download.active_tasks, timeout=5)
-            await runner.cleanup()
-            await bot.session.close()
-            file_handler.close()
-            logging.getLogger().removeHandler(file_handler)
-            logging.getLogger().removeHandler(handler)
-
-    else:
-        # Long Polling fallback for local dev
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, settings.HEALTH_BIND, settings.HEALTH_PORT)
-        await site.start()
-        logging.getLogger("bot.main").info(
-            "Health server (polling) started on %s:%d", settings.HEALTH_BIND, settings.HEALTH_PORT
-        )
-
-        try:
+    try:
+        if use_webhook:
+            with suppress(asyncio.CancelledError):
+                while True:
+                    await asyncio.sleep(3600)
+        else:
             await dp.start_polling(bot)
-        finally:
-            downloader.shutdown()
-            if download.active_tasks:
-                await asyncio.wait(download.active_tasks, timeout=5)
-            await runner.cleanup()
-            await bot.session.close()
-            file_handler.close()
-            logging.getLogger().removeHandler(file_handler)
-            logging.getLogger().removeHandler(handler)
+    finally:
+        await _shutdown(downloader, runner, bot, (handler, file_handler))
 
 
 def _handle_sigterm(signum: int, frame: Any) -> None:

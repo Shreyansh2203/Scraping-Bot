@@ -1,12 +1,14 @@
 import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp import web
 
 from bot.handlers import commands, download
-from bot.main import main
+from bot.main import _shutdown, main
 from core.config import settings
+from core.downloader_wrapper import DownloaderWrapper
 
 
 @pytest.fixture(autouse=True)
@@ -65,3 +67,29 @@ async def test_main_webhook_flow(monkeypatch):
         await main()
 
         mock_bot.session.close.assert_called_once()
+
+
+async def test_shutdown_drains_tasks_and_releases_resources():
+    downloader = MagicMock(spec=DownloaderWrapper)
+    runner = MagicMock(spec=web.AppRunner)
+    runner.cleanup = AsyncMock()
+    bot = MagicMock()
+    bot.session.close = AsyncMock()
+    file_handler = MagicMock(spec=logging.Handler)
+    stream_handler = MagicMock(spec=logging.Handler)
+    root_logger = MagicMock()
+    pending = {asyncio.create_task(asyncio.sleep(0))}
+
+    with (
+        patch.object(download, "active_tasks", pending),
+        patch("logging.getLogger", return_value=root_logger),
+    ):
+        await _shutdown(downloader, runner, bot, (stream_handler, file_handler))
+
+    downloader.shutdown.assert_called_once()
+    assert all(task.done() for task in pending)
+    runner.cleanup.assert_awaited_once()
+    bot.session.close.assert_awaited_once()
+    stream_handler.close.assert_called_once()
+    file_handler.close.assert_called_once()
+    assert root_logger.removeHandler.call_count == 2

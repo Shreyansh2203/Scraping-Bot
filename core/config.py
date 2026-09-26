@@ -12,8 +12,6 @@ load_dotenv()
 
 
 class Settings:
-    __version__: str = "0.1.0"
-
     def __init__(self) -> None:
         self.BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
         self.DOWNLOAD_DIR: Path = Path(os.getenv("DOWNLOAD_DIR", "./downloads"))

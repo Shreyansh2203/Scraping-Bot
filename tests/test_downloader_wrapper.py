@@ -416,6 +416,41 @@ async def test_download_async_timeout_kills_process_tree(tmp_path):
     proc.kill.assert_not_called()
 
 
+async def test_download_async_recovers_file_when_reported_path_is_wrong(tmp_path):
+    wrapper = DownloaderWrapper(output_dir=tmp_path)
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = MagicMock()
+        proc.communicate = AsyncMock(return_value=(b"video.mp4\n2048\n1920x1080\n22\n", b""))
+        proc.returncode = 0
+
+        async def side_effect(*args, **kwargs):
+            cwd = Path(kwargs["cwd"])
+            (cwd / "clip [18051999501].mp4").write_bytes(b"x" * 2048)
+            return proc
+
+        mock_exec.side_effect = side_effect
+
+        res = await wrapper.download_url("https://x.com/user/status/123", 12345)
+
+    assert res.success is True
+    assert res.file_path is not None
+    assert res.file_path.name == "clip [18051999501].mp4"
+    assert res.size == 2048
+    res.cleanup()
+
+
+async def test_download_async_cleans_up_job_dir_when_the_subprocess_cannot_start(tmp_path):
+    wrapper = DownloaderWrapper(output_dir=tmp_path)
+
+    with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError("python missing")):
+        res = await wrapper.download_url("https://x.com/user/status/123", 12345)
+
+    assert res.success is False
+    assert "python missing" in res.error
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.parametrize(
     "url",
     [

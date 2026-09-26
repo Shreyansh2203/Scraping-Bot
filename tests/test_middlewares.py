@@ -35,13 +35,13 @@ async def test_throttle_middleware_allows_first_and_throttles_rapid(mock_message
 
 
 async def test_throttle_middleware_allows_after_interval(mock_message):
-    middleware = ThrottleMiddleware(rate_limit=0.05)
+    middleware = ThrottleMiddleware(rate_limit=1.0)
     handler = AsyncMock(return_value="ok")
 
     await middleware(handler, mock_message, {})
     assert handler.call_count == 1
 
-    time.sleep(0.06)
+    middleware.last_request[12345] = time.monotonic() - 2.0
 
     res = await middleware(handler, mock_message, {})
     assert res == "ok"
