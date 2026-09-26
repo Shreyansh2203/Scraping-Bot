@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -9,6 +10,8 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 load_dotenv()
+
+_BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]+$")
 
 
 class Settings:
@@ -59,6 +62,10 @@ class Settings:
     def validate(self) -> None:
         if not self.BOT_TOKEN:
             raise RuntimeError("BOT_TOKEN is not set")
+        if not _BOT_TOKEN_RE.match(self.BOT_TOKEN):
+            raise RuntimeError(
+                "BOT_TOKEN is malformed; expected the '<bot_id>:<secret>' value from @BotFather"
+            )
         if self.CONCURRENT_DOWNLOADS < 1:
             raise RuntimeError("CONCURRENT_DOWNLOADS must be >= 1")
         if self.MAX_FILE_SIZE_MB < 1:

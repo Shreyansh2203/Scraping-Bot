@@ -99,6 +99,34 @@ def test_settings_validation_public_bot_warning(monkeypatch, caplog):
 
 
 @pytest.mark.parametrize(
+    "token",
+    [
+        "your_token_here",
+        "123456:",
+        "123 456:ABC",
+        "123:ABC:DEF",
+        "123:abc def",
+        "@my_bot",
+    ],
+)
+def test_settings_validation_rejects_malformed_bot_token(monkeypatch, token):
+    monkeypatch.setenv("BOT_TOKEN", token)
+    with pytest.raises(RuntimeError, match="BOT_TOKEN is malformed"):
+        Settings().validate()
+
+
+@pytest.mark.parametrize("token", ["123:ABC", "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"])
+def test_settings_validation_accepts_well_formed_bot_token(monkeypatch, token):
+    monkeypatch.setenv("BOT_TOKEN", token)
+    monkeypatch.setenv("CONCURRENT_DOWNLOADS", "2")
+    monkeypatch.setenv("MAX_FILE_SIZE_MB", "50")
+    monkeypatch.setenv("ALLOWED_USERS", "1")
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.delenv("HEALTH_PORT", raising=False)
+    Settings().validate()
+
+
+@pytest.mark.parametrize(
     ("port", "health_port", "expected"),
     [
         (None, None, 8080),
