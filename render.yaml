@@ -16,7 +16,12 @@ services:
       - key: MAX_FILE_SIZE_MB
         value: "50"
       - key: ALLOWED_USERS
-        value: ""  # comma-separated Telegram user IDs, empty = public
+        # Prompt on deploy: comma-separated Telegram user IDs. Leave empty for a public bot.
+        sync: false
+      - key: SUBPROCESS_TIMEOUT
+        value: "180"
+      - key: FFPROBE_TIMEOUT
+        value: "10"
       - key: HEALTH_BIND
         value: "0.0.0.0"
     healthCheckPath: /health

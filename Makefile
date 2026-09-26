@@ -16,7 +16,7 @@ install:
 	pip install .
 
 dev:
-	pip install .[dev]
+	pip install ".[dev]"
 
 test:
 	pytest
