@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -13,13 +14,12 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 if importlib.util.find_spec("yt_dlp") is None:
     raise RuntimeError("yt-dlp is required. Install with: pip install yt-dlp")
 if importlib.util.find_spec("gallery_dl") is None:
     raise RuntimeError("gallery-dl is required. Install with: pip install gallery-dl")
-
-__version__ = "0.1.0"
 
 SUPPORTED_EXTENSIONS = {
     ".mp4",
@@ -37,6 +37,51 @@ SUPPORTED_EXTENSIONS = {
 DEFAULT_MIN_FILE_SIZE = 1024  # 1KB for images
 
 logger = logging.getLogger("downloader")
+
+
+def _subprocess_kwargs() -> dict[str, Any]:
+    """Isolate the child in its own process group so the whole tree can be killed."""
+    if sys.platform == "win32":
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+        )
+        return {"creationflags": flags}
+    return {"start_new_session": True}
+
+
+async def _terminate_tree(proc: asyncio.subprocess.Process) -> None:
+    """Kill the downloader and the ffmpeg processes it spawned, then reap it."""
+    if sys.platform == "win32":
+        try:
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill",
+                "/F",
+                "/T",
+                "/PID",
+                str(proc.pid),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await killer.wait()
+        except OSError:
+            proc.kill()
+    else:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except OSError:
+            proc.kill()
+    await proc.wait()
+
+
+def _is_safe_url(url: str) -> bool:
+    """Untrusted user input must never reach the child process as a flag or a shell word."""
+    if not url or any(char.isspace() for char in url):
+        return False
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and bool(parts.netloc)
 
 
 @dataclass
@@ -103,6 +148,11 @@ class DownloaderWrapper:
             return await self._download_async(url, user_id)
 
     async def _download_async(self, url: str, user_id: int) -> DownloadResult:
+        if not _is_safe_url(url):
+            return DownloadResult(
+                success=False, error=f"Refusing to fetch non-http(s) URL: {url[:200]!r}"
+            )
+
         job_id = uuid.uuid4().hex[:12]
         job_dir = (self.output_dir / f"job_{job_id}").resolve()
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -125,15 +175,14 @@ class DownloaderWrapper:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                         cwd=str(job_dir),
-                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                        **_subprocess_kwargs(),
                     )
                     try:
                         stdout_bytes, stderr_bytes = await asyncio.wait_for(
                             proc.communicate(), timeout=self.subprocess_timeout
                         )
                     except TimeoutError:
-                        proc.kill()
-                        await proc.wait()
+                        await _terminate_tree(proc)
                         raise
 
                     stdout = stdout_bytes.decode(errors="replace")
@@ -212,12 +261,14 @@ class DownloaderWrapper:
             return DownloadResult(success=False, error=str(exc))
 
     async def _run_gallery_dl(self, url: str, job_dir: Path) -> DownloadResult:
+        target_dir = job_dir / "gallery_dl"
+        target_dir.mkdir(parents=True, exist_ok=True)
         cmd = [
             sys.executable,
             "-m",
             "gallery_dl",
             "--directory",
-            str(job_dir),
+            str(target_dir),
             "-q",
             url,
         ]
@@ -226,16 +277,15 @@ class DownloaderWrapper:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(job_dir),
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                cwd=str(target_dir),
+                **_subprocess_kwargs(),
             )
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
                     proc.communicate(), timeout=self.subprocess_timeout
                 )
             except TimeoutError:
-                proc.kill()
-                await proc.wait()
+                await _terminate_tree(proc)
                 raise
 
             returncode = proc.returncode or 0
@@ -249,15 +299,15 @@ class DownloaderWrapper:
             return DownloadResult(success=False, error=f"gallery-dl failed: {stderr or stdout}")
 
         downloaded_files: list[Path] = []
-        for root, _, files in os.walk(job_dir):
+        for root, _, files in os.walk(target_dir):
             for file in files:
                 file_path = Path(root) / file
                 if file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
-                    if file_path.parent != job_dir:
-                        dest = job_dir / file_path.name
+                    if file_path.parent != target_dir:
+                        dest = target_dir / file_path.name
                         counter = 1
                         while dest.exists():
-                            dest = job_dir / f"{file_path.stem}_{counter}{file_path.suffix}"
+                            dest = target_dir / f"{file_path.stem}_{counter}{file_path.suffix}"
                             counter += 1
                         shutil.move(str(file_path), str(dest))
                         downloaded_files.append(dest)
@@ -493,7 +543,7 @@ class DownloaderWrapper:
                 str(file_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **_subprocess_kwargs(),
             )
             try:
                 stdout_bytes, _ = await asyncio.wait_for(

@@ -1,9 +1,20 @@
+import os
+import signal
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.downloader_wrapper import SUPPORTED_EXTENSIONS, DownloaderWrapper, DownloadResult
+from core.downloader_wrapper import (
+    SUPPORTED_EXTENSIONS,
+    DownloaderWrapper,
+    DownloadResult,
+    _is_safe_url,
+    _subprocess_kwargs,
+    _terminate_tree,
+)
 
 
 @pytest.fixture
@@ -190,27 +201,100 @@ async def test_probe_resolution_no_ffprobe(tmp_path):
         assert res is None
 
 
+def _gallery_dl_stub(files):
+    async def side_effect(*args, **kwargs):
+        target = Path(args[args.index("--directory") + 1])
+        for rel, data in files.items():
+            path = target / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        proc = MagicMock()
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        proc.returncode = 0
+        return proc
+
+    return side_effect
+
+
 async def test_run_gallery_dl_success(tmp_path):
     wrapper = DownloaderWrapper(output_dir=tmp_path)
     job_dir = tmp_path / "job_test"
     job_dir.mkdir()
 
-    # Pre-populate a file that gallery-dl will "download"
-    sub_dir = job_dir / "instagram"
-    sub_dir.mkdir()
-    dl_file = sub_dir / "image.jpg"
-    dl_file.write_bytes(b"image data")
-
     with patch("asyncio.create_subprocess_exec") as mock_exec:
-        proc = MagicMock()
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        proc.returncode = 0
-        mock_exec.return_value = proc
+        mock_exec.side_effect = _gallery_dl_stub({"instagram/image.jpg": b"image data"})
 
         res = await wrapper._run_gallery_dl("https://instagram.com/p/ABC", job_dir)
         assert res.success is True
         assert len(res.file_paths) == 1
         assert res.file_paths[0].name == "image.jpg"
+
+
+async def test_run_gallery_dl_ignores_artifacts_of_previous_attempt(tmp_path):
+    wrapper = DownloaderWrapper(output_dir=tmp_path)
+    job_dir = tmp_path / "job_test"
+    job_dir.mkdir()
+    stale = job_dir / "yt_dlp_partial.mp4"
+    stale.write_bytes(b"x" * 4096)
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        mock_exec.side_effect = _gallery_dl_stub({"post/photo.jpg": b"image data"})
+
+        res = await wrapper._run_gallery_dl("https://instagram.com/p/ABC", job_dir)
+
+    assert [p.name for p in res.file_paths] == ["photo.jpg"]
+    assert res.file_paths[0].parent == job_dir / "gallery_dl"
+    assert stale.read_bytes() == b"x" * 4096
+    assert res.job_dir == job_dir
+
+
+async def test_run_gallery_dl_timeout_terminates_tree(tmp_path):
+    wrapper = DownloaderWrapper(output_dir=tmp_path, subprocess_timeout=0.01)
+    job_dir = tmp_path / "job_test"
+    job_dir.mkdir()
+
+    with (
+        patch("asyncio.create_subprocess_exec") as mock_exec,
+        patch("core.downloader_wrapper._terminate_tree", new_callable=AsyncMock) as mock_term,
+    ):
+        proc = MagicMock()
+        proc.communicate = AsyncMock(side_effect=TimeoutError)
+        mock_exec.return_value = proc
+
+        res = await wrapper._run_gallery_dl("https://instagram.com/p/ABC", job_dir)
+
+    assert res.success is False
+    mock_term.assert_awaited_once_with(proc)
+    proc.kill.assert_not_called()
+
+
+async def test_run_gallery_dl_no_supported_files(tmp_path):
+    wrapper = DownloaderWrapper(output_dir=tmp_path)
+    job_dir = tmp_path / "job_test"
+    job_dir.mkdir()
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        mock_exec.side_effect = _gallery_dl_stub({"post/notes.txt": b"nope"})
+
+        res = await wrapper._run_gallery_dl("https://instagram.com/p/ABC", job_dir)
+
+    assert res.success is False
+    assert res.error == "gallery-dl returned no supported files"
+
+
+async def test_run_gallery_dl_flattens_nested_dirs(tmp_path):
+    wrapper = DownloaderWrapper(output_dir=tmp_path)
+    job_dir = tmp_path / "job_test"
+    job_dir.mkdir()
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        mock_exec.side_effect = _gallery_dl_stub({"post1/img1.jpg": b"a", "post2/img1.jpg": b"b"})
+
+        res = await wrapper._run_gallery_dl("https://instagram.com/p/ABC", job_dir)
+
+    assert res.success is True
+    assert [p.name for p in res.file_paths] == ["img1.jpg", "img1_1.jpg"]
+    assert res.size == 2
 
 
 async def test_run_gallery_dl_nonzero_exit(tmp_path):
@@ -309,3 +393,129 @@ async def test_download_async_ytdlp_fail_gallery_dl_success(tmp_path):
             res = await wrapper.download_url("https://instagram.com/p/ABC", 12345)
             assert res.success is True
             assert res.size == 1000
+
+
+async def test_download_async_timeout_kills_process_tree(tmp_path):
+    wrapper = DownloaderWrapper(output_dir=tmp_path, subprocess_timeout=0.01)
+
+    with (
+        patch("asyncio.create_subprocess_exec") as mock_exec,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("core.downloader_wrapper._terminate_tree", new_callable=AsyncMock) as mock_term,
+        patch.object(wrapper, "_run_gallery_dl", new_callable=AsyncMock) as mock_gdl,
+    ):
+        proc = MagicMock()
+        proc.communicate = AsyncMock(side_effect=TimeoutError)
+        mock_exec.return_value = proc
+        mock_gdl.return_value = DownloadResult(success=False, error="gdl failed")
+
+        res = await wrapper.download_url("https://x.com/user/status/123", 12345)
+
+    assert res.success is False
+    assert mock_term.await_count == 3
+    proc.kill.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://x.com/user/status/123",
+        "http://instagram.com/p/ABC123",
+        "https://www.instagram.com/reel/ABC/?utm_source=tg",
+        "https://example.com/path/to/file?a=1&b=2",
+    ],
+)
+def test_is_safe_url_accepts_http_urls(url):
+    assert _is_safe_url(url) is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "--exec=touch /tmp/pwned",
+        "-o/tmp/pwned",
+        "file:///etc/passwd",
+        "ftp://example.com/x",
+        "javascript:alert(1)",
+        "https://",
+        "https://x.com/user status/1",
+        "not-a-url",
+        "",
+    ],
+)
+def test_is_safe_url_rejects_everything_else(url):
+    assert _is_safe_url(url) is False
+
+
+@pytest.mark.parametrize("url", ["--exec=touch /tmp/pwned", "file:///etc/passwd", "  "])
+async def test_download_url_never_spawns_a_process_for_unsafe_input(tmp_path, url):
+    wrapper = DownloaderWrapper(output_dir=tmp_path)
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        res = await wrapper.download_url(url, 12345)
+
+    assert res.success is False
+    assert "Refusing to fetch" in res.error
+    mock_exec.assert_not_called()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_subprocess_kwargs_isolates_process_group():
+    if sys.platform == "win32":
+        new_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        kwargs = _subprocess_kwargs()
+        assert kwargs["creationflags"] != 0
+        assert kwargs["creationflags"] & new_group
+    else:
+        assert _subprocess_kwargs() == {"start_new_session": True}
+
+
+async def test_terminate_tree_kills_process_group_on_posix(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    proc = MagicMock()
+    proc.pid = 4242
+    proc.wait = AsyncMock()
+    killpg = MagicMock()
+    monkeypatch.setattr(signal, "SIGKILL", 9, raising=False)
+    monkeypatch.setattr(os, "getpgid", MagicMock(return_value=4242), raising=False)
+    monkeypatch.setattr(os, "killpg", killpg, raising=False)
+
+    await _terminate_tree(proc)
+
+    killpg.assert_called_once_with(4242, 9)
+    proc.kill.assert_not_called()
+    proc.wait.assert_awaited_once()
+
+
+async def test_terminate_tree_uses_taskkill_on_windows(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    proc = MagicMock()
+    proc.pid = 1234
+    proc.wait = AsyncMock()
+    killer = MagicMock()
+    killer.wait = AsyncMock()
+
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        mock_exec.return_value = killer
+        await _terminate_tree(proc)
+
+    args = mock_exec.call_args[0]
+    assert args[0] == "taskkill"
+    assert "/T" in args and "/PID" in args and "1234" in args
+    killer.wait.assert_awaited_once()
+    proc.wait.assert_awaited_once()
+
+
+async def test_terminate_tree_falls_back_to_kill(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    proc = MagicMock()
+    proc.pid = 77
+    proc.wait = AsyncMock()
+    monkeypatch.setattr(signal, "SIGKILL", 9, raising=False)
+    monkeypatch.setattr(os, "getpgid", MagicMock(return_value=77), raising=False)
+    monkeypatch.setattr(os, "killpg", MagicMock(side_effect=ProcessLookupError), raising=False)
+
+    await _terminate_tree(proc)
+
+    proc.kill.assert_called_once()
+    proc.wait.assert_awaited_once()
