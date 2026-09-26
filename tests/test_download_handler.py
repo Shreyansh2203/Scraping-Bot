@@ -1,12 +1,21 @@
 import asyncio
+from contextlib import suppress
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aiogram.types import Message, User
+from aiogram.types import (
+    InputMediaAudio,
+    InputMediaDocument,
+    InputMediaPhoto,
+    InputMediaVideo,
+    Message,
+    User,
+)
 
 from bot.handlers.download import (
     _URL_RE,
     _get_media_type,
+    _on_download_task_done,
     _process_download,
     active_tasks,
     handle_fallback,
@@ -111,6 +120,22 @@ async def test_handle_url_no_match(mock_message):
     assert len(active_tasks) == initial_tasks
 
 
+async def test_handle_url_logs_unexpected_task_failure(mock_message, caplog):
+    mock_downloader = MagicMock(spec=DownloaderWrapper)
+
+    with patch(
+        "bot.handlers.download._process_download", new_callable=AsyncMock, side_effect=OSError
+    ):
+        await handle_url(mock_message, mock_downloader)
+        tasks = list(active_tasks)
+        for task in tasks:
+            await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0)
+
+    assert "Download task terminated unexpectedly" in caplog.text
+    assert not active_tasks
+
+
 async def test_process_download_single_video(mock_message, tmp_path):
     video_file = tmp_path / "video.mp4"
     video_file.write_bytes(b"x" * 1024)
@@ -205,8 +230,133 @@ async def test_process_download_media_group_chunked(mock_message, tmp_path):
     await _process_download(mock_message, downloader, "https://x.com/user/status/123", 12345)
 
     assert mock_message.reply_media_group.call_count == 2
+    assert all(
+        2 <= len(call.kwargs["media"]) <= 10
+        for call in mock_message.reply_media_group.call_args_list
+    )
     status_msg.edit_text.assert_called_once()
     assert "Done" in status_msg.edit_text.call_args[0][0]
+
+
+async def test_process_download_trailing_single_item_chunk(mock_message, tmp_path):
+    files = []
+    for i in range(11):  # 11 files -> chunks of 10 and 1
+        f = tmp_path / f"img_{i}.jpg"
+        f.write_bytes(b"x" * 500)
+        files.append(f)
+
+    status_msg = MagicMock(spec=Message)
+    status_msg.edit_text = AsyncMock()
+    mock_message.reply.return_value = status_msg
+
+    downloader = MagicMock(spec=DownloaderWrapper)
+    res = DownloadResult(success=True, file_paths=files, size=5500, verified=True)
+    downloader.download_url = AsyncMock(return_value=res)
+
+    await _process_download(mock_message, downloader, "https://x.com/user/status/123", 12345)
+
+    # Telegram rejects media groups with a single item, so the 11th file is sent on its own
+    assert mock_message.reply_media_group.call_count == 1
+    mock_message.reply_photo.assert_called_once()
+    assert "Part 2/2" in mock_message.reply_photo.call_args.kwargs["caption"]
+
+
+async def test_process_download_escapes_html_in_error_caption(mock_message):
+    status_msg = MagicMock(spec=Message)
+    status_msg.edit_text = AsyncMock()
+    mock_message.reply.return_value = status_msg
+
+    downloader = MagicMock(spec=DownloaderWrapper)
+    res = DownloadResult(success=False, error="<b>ERROR</b>: video unavailable & private")
+    downloader.download_url = AsyncMock(return_value=res)
+
+    await _process_download(mock_message, downloader, "https://x.com/user/status/123", 12345)
+
+    text = status_msg.edit_text.call_args[0][0]
+    assert "<b>" not in text
+    assert "&lt;b&gt;ERROR&lt;/b&gt;" in text
+    assert "unavailable &amp; private" in text
+
+
+async def test_process_download_escapes_html_in_exception_caption(mock_message):
+    status_msg = MagicMock(spec=Message)
+    status_msg.edit_text = AsyncMock()
+    mock_message.reply.return_value = status_msg
+
+    downloader = MagicMock(spec=DownloaderWrapper)
+    downloader.download_url = AsyncMock(side_effect=RuntimeError("<tg-send>bad request</tg-send>"))
+
+    await _process_download(mock_message, downloader, "https://x.com/user/status/123", 12345)
+
+    text = status_msg.edit_text.call_args[0][0]
+    assert "<tg-send>" not in text
+    assert "&lt;tg-send&gt;" in text
+
+
+async def test_process_download_escapes_html_in_url_caption(mock_message, tmp_path):
+    video_file = tmp_path / "video.mp4"
+    video_file.write_bytes(b"x" * 1024)
+
+    status_msg = MagicMock(spec=Message)
+    status_msg.edit_text = AsyncMock()
+    mock_message.reply.return_value = status_msg
+
+    downloader = MagicMock(spec=DownloaderWrapper)
+    res = DownloadResult(
+        success=True,
+        file_paths=[video_file],
+        size=1024,
+        resolution="1920x1080 <hdr>",
+        verified=True,
+    )
+    downloader.download_url = AsyncMock(return_value=res)
+
+    await _process_download(mock_message, downloader, "https://x.com/user/status/123", 12345)
+
+    caption = mock_message.reply_video.call_args.kwargs["caption"]
+    assert "<hdr>" not in caption
+    assert "1920x1080 &lt;hdr&gt;" in caption
+
+
+async def test_process_download_mixed_media_album(mock_message, tmp_path):
+    files = []
+    for name in ("img.jpg", "clip.mp4", "sound.mp3", "sticker.webp"):
+        f = tmp_path / name
+        f.write_bytes(b"x" * 500)
+        files.append(f)
+
+    status_msg = MagicMock(spec=Message)
+    status_msg.edit_text = AsyncMock()
+    mock_message.reply.return_value = status_msg
+
+    downloader = MagicMock(spec=DownloaderWrapper)
+    res = DownloadResult(success=True, file_paths=files, size=2000, verified=True)
+    downloader.download_url = AsyncMock(return_value=res)
+
+    await _process_download(mock_message, downloader, "https://x.com/user/status/123", 12345)
+
+    mock_message.reply_media_group.assert_called_once()
+    media = mock_message.reply_media_group.call_args.kwargs["media"]
+    assert [type(item) for item in media] == [
+        InputMediaPhoto,
+        InputMediaVideo,
+        InputMediaAudio,
+        InputMediaDocument,
+    ]
+    assert media[0].caption and "Total Size" in media[0].caption
+    assert all(item.caption is None for item in media[1:])
+
+
+async def test_on_download_task_done_ignores_cancelled_tasks():
+    task = asyncio.create_task(asyncio.sleep(30))
+    active_tasks.add(task)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    _on_download_task_done(task)
+
+    assert task not in active_tasks
 
 
 async def test_process_download_oversized(mock_message, tmp_path, monkeypatch):

@@ -4,6 +4,7 @@ import asyncio
 import html
 import logging
 import re
+from pathlib import Path
 from typing import Any, Optional
 
 from aiogram import Router, types
@@ -41,6 +42,32 @@ def _get_media_type(path: str) -> str:
     return "document"
 
 
+async def _reply_media(message: types.Message, path: Path, caption: str) -> None:
+    input_file = FSInputFile(path)
+    media_type = _get_media_type(path.name)
+    if media_type == "photo":
+        await message.reply_photo(input_file, caption=caption)
+    elif media_type == "video":
+        await message.reply_video(input_file, caption=caption)
+    elif media_type == "audio":
+        await message.reply_audio(input_file, caption=caption)
+    else:
+        await message.reply_document(
+            input_file,
+            caption=caption,
+            disable_content_type_detection=False,
+        )
+
+
+def _on_download_task_done(task: asyncio.Task[Any]) -> None:
+    active_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Download task terminated unexpectedly", exc_info=exc)
+
+
 @router.message(lambda m: bool(_URL_RE.search((m.text or m.caption or ""))))
 async def handle_url(message: types.Message, downloader: DownloaderWrapper) -> None:
     text: Optional[str] = message.text or message.caption
@@ -52,7 +79,7 @@ async def handle_url(message: types.Message, downloader: DownloaderWrapper) -> N
 
     task = asyncio.create_task(_process_download(message, downloader, url, user_id))
     active_tasks.add(task)
-    task.add_done_callback(active_tasks.discard)
+    task.add_done_callback(_on_download_task_done)
 
 
 async def _process_download(
@@ -85,24 +112,11 @@ async def _process_download(
 
             escaped_url = html.escape(url)
             caption = f"<code>{escaped_url}</code>\n" f"Total Size: {total_size_mb:.1f} MB" + (
-                f"\nResolution: {result.resolution}" if result.resolution else ""
+                f"\nResolution: {html.escape(result.resolution)}" if result.resolution else ""
             )
 
             if len(valid_paths) == 1:
-                media_type = _get_media_type(valid_paths[0].name)
-                input_file = FSInputFile(valid_paths[0])
-                if media_type == "photo":
-                    await message.reply_photo(input_file, caption=caption)
-                elif media_type == "video":
-                    await message.reply_video(input_file, caption=caption)
-                elif media_type == "audio":
-                    await message.reply_audio(input_file, caption=caption)
-                else:
-                    await message.reply_document(
-                        input_file,
-                        caption=caption,
-                        disable_content_type_detection=False,
-                    )
+                await _reply_media(message, valid_paths[0], caption)
             else:
                 # Telegram limit is 10 items per media group; batch into chunks of 10
                 chunk_size = 10
@@ -111,16 +125,22 @@ async def _process_download(
                 ]
 
                 for chunk_idx, chunk in enumerate(chunks):
+                    chunk_caption = (
+                        f"{caption} (Part {chunk_idx + 1}/{len(chunks)})"
+                        if len(chunks) > 1
+                        else caption
+                    )
+
+                    # A media group needs at least 2 items, so send leftovers on their own
+                    if len(chunk) == 1:
+                        await _reply_media(message, chunk[0], chunk_caption)
+                        continue
+
                     media_group: list[Any] = []
                     for idx, p in enumerate(chunk):
                         media_type = _get_media_type(p.name)
                         fs_file = FSInputFile(p)
-
-                        item_caption = (
-                            f"{caption} (Part {chunk_idx + 1}/{len(chunks)})"
-                            if (idx == 0 and len(chunks) > 1)
-                            else (caption if idx == 0 else None)
-                        )
+                        item_caption = chunk_caption if idx == 0 else None
 
                         media: Any
                         if media_type == "photo":
@@ -143,12 +163,13 @@ async def _process_download(
 
         else:
             if status_msg:
-                await status_msg.edit_text(f"❌ Failed: {result.error or 'Unknown error'}")
+                detail = html.escape(result.error or "Unknown error")
+                await status_msg.edit_text(f"❌ Failed: {detail}")
 
     except Exception as exc:
         logger.exception("Download failed for %s", url)
         if status_msg:
-            await status_msg.edit_text(f"❌ Error: {exc}")
+            await status_msg.edit_text(f"❌ Error: {html.escape(str(exc))}")
     finally:
         if result:
             result.cleanup()
