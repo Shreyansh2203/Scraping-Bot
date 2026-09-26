@@ -5,7 +5,7 @@ description = "Telegram bot for downloading videos from Instagram and Twitter/X"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
-authors = [{ name = "Shreyansh" }]
+authors = [{ name = "Shreyansh Srivastava" }]
 keywords = ["telegram", "bot", "yt-dlp", "instagram", "twitter", "downloader"]
 classifiers = [
     "Development Status :: 4 - Beta",

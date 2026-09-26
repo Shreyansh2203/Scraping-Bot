@@ -5,8 +5,28 @@
 [![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](pyproject.toml)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Docker](https://img.shields.io/badge/docker-gHCR-2496ED?logo=docker&logoColor=white)](https://github.com/Shreyansh2203/Scraping-Bot/pkgs/container/scraping-bot)
 
-A mission-critical, enterprise-grade Telegram bot for downloading and streaming media from Instagram and Twitter/X. Built with `aiogram 3`, `yt-dlp`, and `gallery-dl`.
+Telegram bot that downloads the media behind an Instagram or Twitter/X link.
+
+## The problem
+
+Instagram and X ship no way to save a post's media. Saving a Reel or a tweet video
+means either the official app's single-item, single-post flow or a third-party site
+that keeps the file, wraps it in ads, and is frequently blocked from a datacenter IP.
+For a carousel or an album of clips there is no batch option at all: every item has
+to be saved by hand, one message at a time.
+
+## What it does
+
+Paste a link into a Telegram chat and the bot sends the media back, as a single file
+or as an album. It extracts with `yt-dlp`, retries transient failures with exponential
+backoff, and falls back to `gallery-dl` when Instagram or X refuses the request. Each
+download runs in its own throwaway directory, so concurrent jobs cannot collide.
+Carousels larger than Telegram's 10-item album limit are split into consecutive albums.
+
+The service runs as a single container, exposes `/health` and Prometheus `/metrics`,
+and can be restricted to a list of Telegram user IDs with `ALLOWED_USERS`.
 
 ---
 
@@ -113,7 +133,7 @@ Configure the application via environment variables or a `.env` file:
 | `BOT_TOKEN` | *required* | Telegram Bot API token from @BotFather |
 | `DOWNLOAD_DIR` | `./downloads` | Directory to store temporary job directories |
 | `CONCURRENT_DOWNLOADS` | `2` | Maximum concurrent downloads allowed |
-| `MAX_FILE_SIZE_MB` | `50` | Maximum file size in MB (Telegram Bot API limit is 50MB) |
+| `MAX_FILE_SIZE_MB` | `50` | Maximum size in MB for a single file; anything larger is rejected after download (Telegram Bot API limit is 50MB) |
 | `ALLOWED_USERS` | *empty* | Comma-separated list of Telegram user IDs (empty = public bot) |
 | `PORT` or `HEALTH_PORT` | `8080` | Port for the aiohttp health & metrics server |
 | `HEALTH_BIND` | `127.0.0.1` | Network interface to bind the health server (`0.0.0.0` in Docker) |
@@ -141,7 +161,8 @@ The application exposes two HTTP endpoints on the configured health port (defaul
 
 This repository includes a `render.yaml` blueprint:
 1. Connect your repository on [Render](https://render.com).
-2. Set the `BOT_TOKEN` secret in the Render dashboard.
+2. When prompted, set the `BOT_TOKEN` secret and the `ALLOWED_USERS` allow-list.
+   An empty allow-list deploys a public bot.
 3. The webhook URL is configured automatically via `RENDER_EXTERNAL_HOSTNAME`.
 
 ---
