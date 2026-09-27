@@ -14,22 +14,36 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # uv 0.12.14 is the resolver the Dockerfile is pinned to, so CI and the image agree
+  # on which resolver produced uv.lock.
+  UV_VERSION: "0.12.14"
+  # Pinned by digest, the same image the CI smoke test blackholes api.telegram.org with.
+  PYTHON_IMAGE: python:3.13.7-slim-bookworm@sha256:adafcc17694d715c905b4c7bebd96907a1fd5cf183395f0ebc4d3428bd22d92d
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.12", "3.13"]
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip' # Automatically caches pip dependencies
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
 
       - name: Install ffmpeg and ffprobe
         # The downloader shells out to both and the suite mocks every subprocess, so
@@ -42,24 +56,29 @@ jobs:
           ffmpeg -version | head -1
           ffprobe -version | head -1
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+      - name: Verify the lockfile is current
+        # Fails if pyproject.toml moved without uv.lock being regenerated, which is the
+        # difference between a reproducible build and a fresh resolve on every run.
+        run: uv lock --check
 
-      - name: Format check (Black)
-        run: black --check .
+      - name: Install the locked dependency set
+        # --python pins the interpreter explicitly: without it uv follows .python-version
+        # (3.12) and the 3.13 leg would silently test 3.12.
+        run: uv sync --locked --python ${{ matrix.python-version }}
+
+      - name: Format check (Ruff)
+        run: uv run ruff format --check .
 
       - name: Lint check (Ruff)
-        run: ruff check .
+        run: uv run ruff check .
 
       - name: Type check (Mypy)
-        run: mypy bot core
+        run: uv run mypy bot core
 
       - name: Run tests (Pytest)
         run: |
           set +e
-          pytest -q --tb=line -rf > /tmp/pytest.log 2>&1
+          uv run pytest -q --tb=line -rf > /tmp/pytest.log 2>&1
           code=$?
           # Surface each failure as a job annotation. A bare "exit code 1" is not
           # diagnosable from the run summary, and the raw log needs authentication.
@@ -69,56 +88,49 @@ jobs:
           tail -40 /tmp/pytest.log
           exit $code
 
-  dependency-audit:
-    name: pip-audit
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.12"
-          cache: 'pip'
-
-      - name: Install pip-audit
-        run: |
-          python -m pip install --upgrade pip
-          pip install "pip-audit>=2.6.0"
-
-      - name: Audit the declared dependencies
-        # Audits what pyproject.toml actually declares, resolved from the index, rather
-        # than whatever happens to be in the runner's environment.
-        run: pip-audit --progress-spinner off .
-
   dependency-review:
     name: Dependency review
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Review the dependency diff
         # Catches a vulnerable or badly licensed package arriving through a pull
         # request. Moderate is the floor rather than the default low so that a
         # low-severity advisory in a transitive dependency does not block every PR.
-        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: moderate
 
   container:
     name: Container image
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Check Dockerfile syntax and build invariants
+        run: docker build --check .
 
       - name: Build image
-        run: docker build -t scraping-bot:ci .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: scraping-bot:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Confirm ffmpeg is in the image
         run: |
@@ -152,7 +164,7 @@ jobs:
           docker network create smoke-net
           docker run -d --name telegram-blackhole \
             --network smoke-net --network-alias api.telegram.org \
-            --entrypoint python python:3.11-slim \
+            --entrypoint python "$PYTHON_IMAGE" \
             -c "import socket; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('0.0.0.0', 443)); s.listen(); [c for c in iter(s.accept, None)]"
           docker run -d --name smoke-bot --network smoke-net -p 8080:8080 \
             -e BOT_TOKEN=1000000000:CiSmokeTestThrowawayTokenNotARealBotToken \
@@ -204,6 +216,19 @@ jobs:
               assert re.fullmatch(r"-?\d+(\.\d+)?([eE][-+]?\d+)?", samples[name]), (name, samples[name])
           print("metrics:", json.dumps(samples, sort_keys=True))
           PY
+
+      - name: Assert the image's own HEALTHCHECK goes healthy
+        # The declared healthcheck is part of the deployment contract on Render, and a
+        # permission or PATH mistake in it is invisible to the /health assertion above:
+        # that one is made from outside the container.
+        run: |
+          for _ in $(seq 1 12); do
+            state="$(docker inspect --format '{{.State.Health.Status}}' smoke-bot)"
+            [ "${state}" = "healthy" ] && break
+            echo "healthcheck state: ${state}"
+            sleep 5
+          done
+          test "$(docker inspect --format '{{.State.Health.Status}}' smoke-bot)" = "healthy"
 
       - name: Dump container logs on failure
         if: failure()

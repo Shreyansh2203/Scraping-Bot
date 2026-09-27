@@ -12,6 +12,8 @@ import re
 import tomllib
 from pathlib import Path
 
+from tests import conftest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Variables Render supplies at runtime. core/config.py reads PORT in preference to
@@ -98,9 +100,9 @@ def test_render_yaml_explains_every_deliberate_omission() -> None:
     comment = _render_comments()
     for name, reason in DELIBERATELY_ABSENT.items():
         assert name in comment, f"render.yaml does not mention the omitted {name}"
-        assert (
-            re.sub(r"\s+", " ", reason) in comment
-        ), f"render.yaml does not give the reason {name} is omitted"
+        assert re.sub(r"\s+", " ", reason) in comment, (
+            f"render.yaml does not give the reason {name} is omitted"
+        )
 
 
 def test_render_yaml_explains_the_render_injected_variables() -> None:
@@ -109,15 +111,33 @@ def test_render_yaml_explains_the_render_injected_variables() -> None:
         assert name in comment, f"render.yaml does not mention the Render-injected {name}"
 
 
+# Matched from the source rather than restated, so the assertion below fails the moment
+# Settings grows a variable instead of going quietly stale.
+_ENV_READ = re.compile(r"""os\.getenv\(\s*["']([A-Z0-9_]+)["']""")
+
+
+def test_every_variable_the_settings_reads_is_isolated() -> None:
+    # conftest's autouse fixture clears these before every test so a value exported in
+    # the developer's shell cannot reach Settings. A variable it does not list is a test
+    # that passes on CI and fails on one machine, which is the failure mode worth naming.
+    read = set(_ENV_READ.findall(_read("core/config.py")))
+    unisolated = read - set(conftest.ISOLATED_ENV_VARS)
+    assert not unisolated, (
+        f"core/config.py reads {sorted(unisolated)} but conftest.ISOLATED_ENV_VARS does "
+        "not list them, so an exported value in the developer's shell would reach the "
+        "tests; add them to conftest.ISOLATED_ENV_VARS"
+    )
+
+
 def test_allow_list_is_prompted_for_and_never_hardcoded() -> None:
     render = _read("render.yaml")
     block = render.split("- key: ALLOWED_USERS", 1)[1].split("- key:", 1)[0]
     assert "sync: false" in block, "ALLOWED_USERS must be left to the Render dashboard"
     # value: "" would make the bot public, and would overwrite a value entered in the
     # dashboard on every sync. This is the one line in the file that must not come back.
-    assert not re.search(
-        r"^\s*value:\s*", block, re.MULTILINE
-    ), "ALLOWED_USERS must not carry a value in render.yaml"
+    assert not re.search(r"^\s*value:\s*", block, re.MULTILINE), (
+        "ALLOWED_USERS must not carry a value in render.yaml"
+    )
 
 
 def test_the_webhook_secret_is_never_configured_or_committed() -> None:
@@ -130,9 +150,9 @@ def test_the_webhook_secret_is_never_configured_or_committed() -> None:
     for name in ("render.yaml", ".env.example", "Dockerfile", "README.md"):
         text = _read(name)
         for key in ("WEBHOOK_SECRET", "SECRET_TOKEN"):
-            assert (
-                key not in text
-            ), f"{name} declares {key}; the webhook secret is generated at boot"
+            assert key not in text, (
+                f"{name} declares {key}; the webhook secret is generated at boot"
+            )
 
     env_reads = re.findall(r"""os\.getenv\(\s*["']([A-Z0-9_]+)["']""", _read("core/config.py"))
     secret_reads = [name for name in env_reads if "SECRET" in name]
@@ -149,9 +169,9 @@ def test_bot_token_is_prompted_for_and_never_hardcoded() -> None:
 def test_release_please_manifest_matches_the_package_version() -> None:
     manifest = json.loads(_read(".release-please-manifest.json"))
     pyproject = tomllib.loads(_read("pyproject.toml"))
-    assert (
-        manifest["."] == pyproject["project"]["version"]
-    ), "the release-please manifest and pyproject.toml disagree on the version"
+    assert manifest["."] == pyproject["project"]["version"], (
+        "the release-please manifest and pyproject.toml disagree on the version"
+    )
 
 
 def test_release_please_targets_this_project() -> None:

@@ -22,7 +22,7 @@ A clear and concise description of what you expected to happen.
 **Environment (please complete the following information):**
  - OS: [e.g. Ubuntu 22.04]
  - Deployment: [e.g. Docker, Render, Local]
- - Python version: [e.g. 3.11]
+  - Python version: [e.g. 3.12]
  - yt-dlp version: [e.g. 2024.1.0]
 
 **Additional context**

@@ -111,7 +111,7 @@ async def _process_download(
                 return
 
             escaped_url = html.escape(url)
-            caption = f"<code>{escaped_url}</code>\n" f"Total Size: {total_size_mb:.1f} MB" + (
+            caption = f"<code>{escaped_url}</code>\nTotal Size: {total_size_mb:.1f} MB" + (
                 f"\nResolution: {html.escape(result.resolution)}" if result.resolution else ""
             )
 

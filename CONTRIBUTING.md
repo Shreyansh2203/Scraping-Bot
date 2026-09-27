@@ -11,35 +11,57 @@ not going to be merged.
 ## Development Setup
 
 1. Fork and clone the repository.
-2. Install development dependencies:
+2. Install the locked dependency set:
    ```bash
    make dev
    ```
-   `make` is a convenience wrapper. Without it, the same thing is
-   `pip install -e ".[dev]"`.
+   `make` is a convenience wrapper. Without it, the same thing is `uv sync --locked`,
+   which installs the dev group resolved in `uv.lock` — not a fresh resolve from the
+   index. `uv` 0.12 is the version the Dockerfile pins; any recent `uv` will do locally.
 3. Set up your `.env` file from `.env.example`. The only value you need to run the tests is
-   a syntactically valid throwaway `BOT_TOKEN`; the suite never contacts Telegram.
+   a syntactically valid throwaway `BOT_TOKEN`; the suite never contacts Telegram, and it
+   clears every variable `core/config.py` reads before each test, so an exported
+   `HEALTH_BIND` or `WEBHOOK_URL` in your shell will not change a result.
+
+## Dependencies are locked
+
+`pyproject.toml` states lower bounds only. The resolved closure lives in `uv.lock`, and
+`requirements.txt` is its hash-pinned export. Every install path reads the lockfile:
+`make dev`, the CI jobs (`uv sync --locked`), and the Docker build
+(`uv sync --locked --no-dev`).
+
+**If you change a dependency, run `make lock` and commit `uv.lock` and
+`requirements.txt` in the same commit.** CI runs `uv lock --check`, which fails if
+`pyproject.toml` has moved without the lockfile following. Two other places have to be
+updated in that same commit, because both are pinned to the lock rather than derived
+from it:
+
+- `.pre-commit-config.yaml` — the `ruff-pre-commit` and `mirrors-mypy` revs, and the
+  mypy hook's `additional_dependencies`. Check the new versions with `uv tree`.
+- `Dockerfile` — only if the uv pin itself changes.
 
 ## Running the gates
 
-Run these before opening a pull request. CI runs exactly this set on Python 3.11 and 3.12,
-plus the container job and the dependency audit.
+Run these before opening a pull request. CI runs exactly this set on Python 3.12 and
+3.13, plus the container job and the dependency audit.
 
 ```bash
-make format   # black, rewrites files
-make lint     # black --check, ruff, mypy
+make format   # ruff format + ruff check --fix, rewrites files
+make lint     # ruff format --check, ruff check, mypy
 make test     # pytest with the coverage gate
 ```
 
 Or the underlying commands, which is what CI executes:
 
 ```bash
-black .
-black --check .
-ruff check .
-mypy --strict bot/ core/
-pytest
+uv run ruff format --check .
+uv run ruff check .
+uv run mypy bot core
+uv run pytest
 ```
+
+`ruff format` is the only formatter. `make lint` runs it in check mode, so a file that
+`ruff format` would rewrite fails the gate.
 
 `pytest` enforces `fail_under` from `[tool.coverage.report]` in `pyproject.toml`, so a
 change that drops coverage below the floor fails the run. Do not lower the floor, add a
@@ -48,19 +70,24 @@ test.
 
 ### Dependency scanning
 
-`pip-audit` is in the dev extras and checks the dependencies declared in `pyproject.toml`
-against the PyPA advisory database:
+`pip-audit` is in the dev group and checks the locked runtime dependency set against the
+PyPA advisory database:
 
 ```bash
-pip-audit --progress-spinner off .
+make audit
 ```
 
-CI runs that command on every push and pull request, and
-[`.github/workflows/dependency-audit.yml`](.github/workflows/dependency-audit.yml) re-runs
-it against `main` every Monday to catch advisories published after a branch was cut. Pull
-requests also go through a dependency review, which fails when a vulnerable or badly
-licensed package arrives in the diff. Dependabot opens the upgrade pull requests for the
-Python dependencies, the GitHub Actions, and the Docker base image.
+That is `uv run pip-audit --strict --requirement requirements.txt`. Auditing the export
+rather than `pyproject.toml` matters: it audits the exact versions the image installs,
+not whatever the index would resolve today.
+
+[`.github/workflows/dependency-audit.yml`](.github/workflows/dependency-audit.yml) is the
+only place the audit runs, on every push and pull request, and again against `main` every
+Monday to catch advisories published after a branch was cut. (It used to be duplicated
+as a job in `ci.yml`; do not add a second copy.) Pull requests also go through a
+dependency review, which fails when a vulnerable or badly licensed package arrives in
+the diff. Dependabot opens the upgrade pull requests for the Python dependencies, the
+GitHub Actions, and the Docker base image.
 
 ## Adding support for another platform
 

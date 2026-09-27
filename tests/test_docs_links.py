@@ -98,9 +98,9 @@ def test_readme_table_of_contents_matches_the_headings() -> None:
         "table-of-contents"
     }
     assert listed <= headings, f"the table of contents lists {sorted(listed - headings)}"
-    assert (
-        headings <= listed
-    ), f"README has sections missing from the table of contents: {sorted(headings - listed)}"
+    assert headings <= listed, (
+        f"README has sections missing from the table of contents: {sorted(headings - listed)}"
+    )
 
 
 def test_cross_document_anchors_exist() -> None:

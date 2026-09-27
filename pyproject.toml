@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Telegram bot for downloading videos from Instagram and Twitter/X"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [{ name = "Shreyansh Srivastava" }]
 keywords = ["telegram", "bot", "yt-dlp", "instagram", "twitter", "downloader"]
 classifiers = [
@@ -13,8 +13,8 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
@@ -25,14 +25,18 @@ dependencies = [
     "aiohttp>=3.9.0",
 ]
 
-[project.optional-dependencies]
+# PEP 735 development group. This replaces the old [project.optional-dependencies] dev
+# extra: `uv sync` installs the `dev` group by default, so `uv sync --no-dev` is the
+# only thing the image needs, and there is no second copy of the tool list to keep in
+# step. There is deliberately no black here: ruff format is the single formatter, and
+# the pre-commit ruff-format hook and CI were already running it.
+[dependency-groups]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
-    "black>=23.0.0",
     "pip-audit>=2.6.0",
 ]
 
@@ -44,19 +48,15 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["bot*", "core*"]
 
-[tool.black]
-line-length = 100
-target-version = ["py311", "py312"]
-
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

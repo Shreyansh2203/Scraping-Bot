@@ -1,7 +1,13 @@
 version: 2
 updates:
-  # Maintain Python dependencies
-  - package-ecosystem: "pip"
+  # Maintain Python dependencies.
+  #
+  # This is the `uv` ecosystem, not `pip`, and that is load-bearing. uv.lock is the
+  # resolved closure every install path reads and CI gates on with `uv lock --check`;
+  # requirements.txt is generated from it. A `pip` update would edit the lower bounds in
+  # pyproject.toml without regenerating the lock, and the resulting pull request would
+  # fail CI for a reason that has nothing to do with the change.
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
@@ -15,7 +21,7 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
-  
+
   # Maintain Docker base images
   - package-ecosystem: "docker"
     directory: "/"

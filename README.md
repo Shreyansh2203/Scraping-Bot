@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/Shreyansh2203/Scraping-Bot/workflows/CI/badge.svg)](https://github.com/Shreyansh2203/Scraping-Bot/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](pyproject.toml)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Python: 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v18.json)](https://github.com/astral-sh/uv)
 [![Docker](https://img.shields.io/badge/docker-gHCR-2496ED?logo=docker&logoColor=white)](https://github.com/Shreyansh2203/Scraping-Bot/pkgs/container/scraping-bot)
 
 Telegram bot that downloads the media behind an Instagram or Twitter/X link.
@@ -101,14 +101,14 @@ and can be restricted to a list of Telegram user IDs with `ALLOWED_USERS`.
 flowchart TD
     User([Telegram User]) <-->|Webhook / Long Polling| TG[Telegram Bot API]
     TG <--> AI[aiogram 3 Dispatcher]
-    
+
     subgraph Middlewares
         MW1[AuthMiddleware] --> MW2[ThrottleMiddleware (TTL Cache)]
     end
-    
+
     AI --> Middlewares
     Middlewares --> Router[Download Router / Commands]
-    
+
     subgraph Core Engine
         Router --> TaskRegistry[active_tasks Registry]
         TaskRegistry --> DW[DownloaderWrapper]
@@ -117,13 +117,13 @@ flowchart TD
         JobDir -->|Fallback| GDL[gallery-dl Subprocess]
         JobDir --> FFP[ffprobe Resolution Probe]
     end
-    
+
     subgraph Observability
         HealthSrv[aiohttp Health Server]
         HealthSrv --> HealthEndpoint["/health (JSON Status)"]
         HealthSrv --> MetricsEndpoint["/metrics (Prometheus)"]
     end
-    
+
     JobDir --> MediaDelivery[Batch Media Delivery (<= 10 per album)]
     MediaDelivery --> TG
 ```
@@ -145,9 +145,16 @@ flowchart TD
 
 ## Requirements
 
-- Python >= 3.11
+- Python >= 3.12
+- [`uv`](https://docs.astral.sh/uv/) >= 0.12 (the version the Dockerfile pins by digest)
 - `ffmpeg` (required by `yt-dlp` to merge audio/video streams)
 - Telegram Bot Token from [@BotFather](https://t.me/botfather)
+
+Dependency versions are pinned, not floated. `uv.lock` is the resolved closure of
+everything `pyproject.toml` declares, `requirements.txt` is its hash-pinned export, and
+every install path — `make dev`, CI, and the Docker build — reads the lockfile rather
+than resolving from the index. If you change a dependency, run `make lock` and commit
+both files.
 
 ---
 
@@ -173,10 +180,12 @@ flowchart TD
 
 ### Local Development
 
-1. Install dependencies:
+1. Install the locked dependency set:
    ```bash
    make dev
    ```
+   This is `uv sync --locked`, so it installs exactly what `uv.lock` pins. Without
+   `make`, the same thing is `uv sync --locked`.
 2. Run linters and tests:
    ```bash
    make lint
@@ -186,6 +195,10 @@ flowchart TD
    ```bash
    make run
    ```
+
+Formatting is `ruff format` only. There is deliberately no `black` in the toolchain:
+running two formatters over the same tree means a file can be clean under one and
+reformatted by the other, which is a formatting argument rather than a signal.
 
 ---
 

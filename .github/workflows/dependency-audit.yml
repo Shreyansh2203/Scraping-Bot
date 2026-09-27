@@ -1,10 +1,19 @@
 name: Dependency Audit
 
-# The pull-request run in ci.yml only sees the dependency set as it stood when the
-# branch was cut. Advisories for packages that are already released get published
-# afterwards, so this re-scans the current main weekly and fails the build when a
-# known vulnerability turns up in something the image ships.
+# This is the single home of the pip-audit gate. It used to also be duplicated as a job
+# inside ci.yml, which meant the same scan ran twice per push from two copies of the
+# command, and only one of them had to be remembered when the resolver changed.
+#
+# The push and pull_request triggers are what the duplicate CI job provided: a known
+# vulnerability in something this repository ships fails the build before it merges.
+# The weekly cron re-scans main, because the branch-cut run only sees the advisory
+# database as it stood when the branch was cut; advisories for already-released packages
+# are published afterwards.
 on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
   schedule:
     - cron: "23 5 * * 1" # Mondays, 05:23 UTC
   workflow_dispatch:
@@ -16,24 +25,40 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.12.14"
+
 jobs:
   pip-audit:
     name: pip-audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
-          cache: 'pip'
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install pip-audit
-        run: |
-          python -m pip install --upgrade pip
-          pip install "pip-audit>=2.6.0"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
 
-      - name: Audit the declared dependencies
-        run: pip-audit --progress-spinner off .
+      - name: Verify the lockfile is current
+        run: uv lock --check
+
+      - name: Install the locked dependency set
+        # The dev group is synced because pip-audit itself lives there. The file that is
+        # audited is the runtime-only export, so the tools are installed but not scanned:
+        # requirements.txt is what the image ships.
+        run: uv sync --locked
+
+      - name: Audit the locked runtime dependencies
+        # requirements.txt is a hash-pinned uv export of the lockfile, so this audits the
+        # exact versions the image installs rather than whatever the index resolves today.
+        run: uv run pip-audit --strict --progress-spinner off --requirement requirements.txt

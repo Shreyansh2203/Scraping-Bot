@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import importlib.util
 import logging
 import os
@@ -927,9 +927,9 @@ def test_build_command_asks_yt_dlp_to_report_the_size_and_duration_up_front():
     probe_templates = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--print"]
     probe = [tpl for tpl in probe_templates if "scraping-bot-bound:" in tpl]
     assert len(probe) == 1, probe_templates
-    assert probe[0].startswith(
-        "before_dl:"
-    ), "the probe has to be printed before the transfer starts"
+    assert probe[0].startswith("before_dl:"), (
+        "the probe has to be printed before the transfer starts"
+    )
     assert "%(filesize)j" in probe[0] and "%(duration)j" in probe[0]
 
 
@@ -1125,7 +1125,7 @@ def test_the_bound_probe_takes_the_worst_value_across_a_merged_download():
     wrapper = DownloaderWrapper(output_dir=Path("downloads"), max_file_size_mb=1)
 
     result = wrapper._parse_output(
-        "scraping-bot-bound:100|NA|30\n" "scraping-bot-bound:5000000|NA|30\n",
+        "scraping-bot-bound:100|NA|30\nscraping-bot-bound:5000000|NA|30\n",
         0,
     )
 

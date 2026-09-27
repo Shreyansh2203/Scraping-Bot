@@ -9,11 +9,18 @@
 #   BOT_MODE=polling is the escape hatch for platforms with no inbound URL.
 #   HEALTH_PORT is deliberately absent: it is superseded by the injected PORT, which
 #   core/config.py prefers and which Render always sets.
+#
+# The image is built from the repository Dockerfile rather than installed at deploy time,
+# so there is deliberately no build command and no pip install step here. That Dockerfile
+# pins its base image and its uv binary by digest and runs `uv sync --locked` against the
+# committed uv.lock, which is what makes a deploy of this commit reproducible; the
+# hash-pinned requirements.txt is the same resolution for anyone installing without uv.
 
 services:
   - type: web
     name: scraping-bot
     runtime: docker
+    dockerfilePath: ./Dockerfile
     plan: free
     healthCheckPath: /health
 

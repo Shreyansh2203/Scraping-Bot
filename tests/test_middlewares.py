@@ -263,6 +263,6 @@ async def test_throttle_middleware_is_wired_onto_the_dispatcher(monkeypatch):
     first, second = await _feed([("/help", 4242), ("/help", 4242)], same_dispatcher=True)
 
     assert len(first) == 1 and not first[0].startswith("⚠️")
-    assert second == [
-        "⚠️ Slow down! Please wait a moment."
-    ], "the second rapid message from one user was not throttled by the dispatcher"
+    assert second == ["⚠️ Slow down! Please wait a moment."], (
+        "the second rapid message from one user was not throttled by the dispatcher"
+    )
