@@ -46,6 +46,10 @@
     {
       "section": "Maintenance",
       "type": "chore"
+    },
+    {
+      "section": "Style",
+      "type": "style"
     }
   ]
 }

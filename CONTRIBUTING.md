@@ -155,6 +155,7 @@ notes, not for someone reading `git log`.
 | `ci` | CI | Workflows, actions, release automation. |
 | `build` | Build | The Dockerfile, packaging, build config. |
 | `chore` | Maintenance | Everything else that is not user-visible. |
+| `style` | Style | Formatting-only changes with no behaviour difference. |
 
 Scopes are optional and are not part of the type, so `fix(downloader): ...` files under
 Fixed. Mark a breaking change with `!` after the scope, or with a `BREAKING CHANGE:` footer

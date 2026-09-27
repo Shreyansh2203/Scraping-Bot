@@ -39,6 +39,7 @@ REQUIRED_CHANGELOG_TYPES = {
     "ci",
     "build",
     "perf",
+    "style",
 }
 
 
