@@ -436,6 +436,11 @@ class DownloaderWrapper:
 
         total_size = sum(f.stat().st_size for f in downloaded_files if f.exists())
 
+        # os.walk yields in filesystem order, which differs between NTFS and ext4. These
+        # paths become the media group the user receives, so sort them rather than let
+        # the ordering be a property of the filesystem the bot happens to run on.
+        downloaded_files.sort(key=lambda p: p.name)
+
         return DownloadResult(
             success=True,
             file_paths=downloaded_files,
