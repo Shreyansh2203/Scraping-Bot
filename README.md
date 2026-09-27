@@ -9,6 +9,56 @@
 
 Telegram bot that downloads the media behind an Instagram or Twitter/X link.
 
+## Scope and responsible use
+
+**What it is.** A self-hosted Telegram bot. You send it an Instagram or X/Twitter link, it
+extracts the media behind that link with `yt-dlp` (falling back to `gallery-dl`), and it
+sends the file back to the chat it came from. That is the whole feature set: one link in,
+one file or album out.
+
+**What it is not.**
+
+- It is not a bulk downloader. There is no batch mode, no profile or hashtag crawling, no
+  media library, and no scheduling. One message yields at most one post's media.
+- It does not defeat authentication, paywalls, DRM, or age gates. If a platform refuses a
+  request the bot reports the failure; it does not try to route around it.
+- It stores nothing. Each job gets a throwaway directory that is deleted once the file has
+  been delivered, successfully or not.
+
+**Use it on media you are allowed to download** — your own uploads, content you have
+permission or a licence to fetch, and material published under terms that allow it.
+Downloading media in bulk generally conflicts with Instagram's and X's Terms of Use, and
+depending on your jurisdiction and the content it can engage other law as well. Deciding
+what you are entitled to fetch is the operator's responsibility: nothing in this code
+checks ownership, and none of this is legal advice.
+
+**Set `ALLOWED_USERS` before you expose the bot.** Left empty, the allow-list makes the bot
+public — any Telegram account that finds it can spend your bandwidth, disk, and platform
+quota. Put your own Telegram user ID in it, plus anyone else who needs access. The bot logs
+`ALLOWED_USERS is empty; bot is public` at startup; treat that line as the checkpoint
+before you attach a public hostname.
+
+**Rate limits and courtesy.** Every download is a request to a server you do not control.
+Keep `CONCURRENT_DOWNLOADS` low (default `2`), keep `SUBPROCESS_TIMEOUT` and
+`MAX_FILE_SIZE_MB` conservative, and do not stand up a shared instance and circulate the
+link. The bot throttles each user to roughly one request per second and bounds concurrency
+globally, but neither of those is a licence to hammer an origin.
+
+## Table of contents
+
+- [Scope and responsible use](#scope-and-responsible-use)
+- [The problem](#the-problem)
+- [What it does](#what-it-does)
+- [Architecture](#architecture)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Observability](#observability)
+- [Deployment on Render](#deployment-on-render)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## The problem
 
 Instagram and X ship no way to save a post's media. Saving a Reel or a tweet video
@@ -134,7 +184,7 @@ Configure the application via environment variables or a `.env` file:
 | `DOWNLOAD_DIR` | `./downloads` | Directory to store temporary job directories |
 | `CONCURRENT_DOWNLOADS` | `2` | Maximum concurrent downloads allowed |
 | `MAX_FILE_SIZE_MB` | `50` | Maximum size in MB for a single file; anything larger is rejected after download (Telegram Bot API limit is 50MB) |
-| `ALLOWED_USERS` | *empty* | Comma-separated list of Telegram user IDs (empty = public bot) |
+| `ALLOWED_USERS` | *empty* | Comma-separated list of Telegram user IDs. **Empty means a public bot** — set it before exposing the bot, see [Scope and responsible use](#scope-and-responsible-use) |
 | `PORT`, then `HEALTH_PORT` | `8080` | Port for the aiohttp health & metrics server. `PORT` is checked first and takes precedence, which is what Render's injected value relies on |
 | `HEALTH_BIND` | `127.0.0.1` | Network interface to bind the health server (`0.0.0.0` in Docker) |
 | `SUBPROCESS_TIMEOUT` | `180` | Timeout in seconds for extraction subprocesses |
@@ -171,7 +221,9 @@ This repository includes a `render.yaml` blueprint:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflows and coding standards.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflows and coding standards, and
+[SECURITY.md](SECURITY.md) for how to report a vulnerability and what to expect when
+running the bot against untrusted media.
 
 ## License
 
