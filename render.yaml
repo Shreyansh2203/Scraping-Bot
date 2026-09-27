@@ -16,7 +16,8 @@ services:
       - key: MAX_FILE_SIZE_MB
         value: "50"
       - key: ALLOWED_USERS
-        # Prompt on deploy: comma-separated Telegram user IDs. Leave empty for a public bot.
+        # Prompted once when the blueprint is first applied; Render then ignores the
+        # key and preserves whatever the dashboard holds. Leave empty for a public bot.
         sync: false
       - key: SUBPROCESS_TIMEOUT
         value: "180"
@@ -24,4 +25,6 @@ services:
         value: "10"
       - key: HEALTH_BIND
         value: "0.0.0.0"
+      # PORT and RENDER_EXTERNAL_HOSTNAME are deliberately absent: Render injects
+      # both, and core/config.py prefers PORT over HEALTH_PORT for the health server.
     healthCheckPath: /health
