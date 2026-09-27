@@ -21,9 +21,14 @@ services:
       - key: BOT_TOKEN
         sync: false
       - key: ALLOWED_USERS
-        # Never `value: ""`. An empty allow-list is a public bot, and Render would
-        # overwrite a value entered in the dashboard on every sync. sync: false leaves
-        # the variable out of Blueprint management so the dashboard value stands.
+        # Never `value: ""`. An empty allow-list stops the bot at startup, and Render
+        # would overwrite a value entered in the dashboard on every sync. `sync: false`
+        # leaves the variable out of Blueprint management so the dashboard value stands.
+        sync: false
+      - key: ALLOW_PUBLIC
+        # The escape hatch for a deliberately public bot, and it is `sync: false` for
+        # the same reason: a public bot is something you type, not something a
+        # blueprint switch flips on you at the next deploy.
         sync: false
       - key: HEALTH_BIND
         value: 0.0.0.0
@@ -33,6 +38,8 @@ services:
         value: 2
       - key: MAX_FILE_SIZE_MB
         value: 50
+      - key: MAX_DURATION_SECONDS
+        value: 600
       - key: SUBPROCESS_TIMEOUT
         value: 300
       - key: FFPROBE_TIMEOUT

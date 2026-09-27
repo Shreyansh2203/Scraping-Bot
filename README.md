@@ -32,11 +32,16 @@ depending on your jurisdiction and the content it can engage other law as well. 
 what you are entitled to fetch is the operator's responsibility: nothing in this code
 checks ownership, and none of this is legal advice.
 
-**Set `ALLOWED_USERS` before you expose the bot.** Left empty, the allow-list makes the bot
-public — any Telegram account that finds it can spend your bandwidth, disk, and platform
-quota. Put your own Telegram user ID in it, plus anyone else who needs access. The bot logs
-`ALLOWED_USERS is empty; bot is public` at startup; treat that line as the checkpoint
-before you attach a public hostname.
+**Set `ALLOWED_USERS` before you expose the bot.** It is the only access control the bot
+has, so the configuration fails closed: an unset, empty, whitespace-only or partly
+non-numeric value stops the bot at startup with the offending entry named, rather than
+starting and leaving you to notice. A stray comma or a space where a comma should be
+used to be enough to turn a private bot into a public one — a public bot is a subprocess
+spawner anyone on the internet can queue work for. Put your own Telegram user ID in it,
+plus anyone else who needs access. If you do want the bot open, say so with
+`ALLOW_PUBLIC=1`; the bot then logs `ALLOWED_USERS is empty and ALLOW_PUBLIC=1; bot is
+public` at startup, and that line is still the checkpoint to read before you attach a
+public hostname.
 
 **Rate limits and courtesy.** Every download is a request to a server you do not control.
 Keep `CONCURRENT_DOWNLOADS` low (default `2`), keep `SUBPROCESS_TIMEOUT` and
@@ -188,8 +193,10 @@ Configure the application via environment variables or a `.env` file:
 | `BOT_TOKEN` | *required* | Telegram Bot API token from @BotFather |
 | `DOWNLOAD_DIR` | `./downloads` | Directory to store temporary job directories |
 | `CONCURRENT_DOWNLOADS` | `2` | Maximum concurrent downloads allowed |
-| `MAX_FILE_SIZE_MB` | `50` | Maximum size in MB for a single file; anything above this is rejected after download. Telegram's own limit is type-dependent — 10 MB for a photo, 50 MB for a video, audio and document — and this one flat cap is applied to every media type, so a photo between 10 MB and this value passes here and is refused by Telegram |
-| `ALLOWED_USERS` | *empty* | Comma-separated list of Telegram user IDs. **Empty means a public bot** — set it before exposing the bot, see [Scope and responsible use](#scope-and-responsible-use) |
+| `MAX_FILE_SIZE_MB` | `50` | Maximum size in MB for a single file. Anything above this is rejected **before** the bytes are written, as yt-dlp's `--max-filesize`, and the finished file is still re-checked after the download. Telegram's own limit is type-dependent — 10 MB for a photo, 50 MB for a video, audio and document — and this one flat cap is applied to every media type, so a photo between 10 MB and this value passes here and is refused by Telegram |
+| `MAX_DURATION_SECONDS` | `600` | Refuse media longer than this many seconds. Read from the metadata yt-dlp reports before it starts downloading, so a multi-hour stream is rejected in seconds rather than filling the disk. A Reel is 90 s and an X video 140 s, so the default is generous |
+| `ALLOWED_USERS` | *unset* | Comma-separated list of Telegram user IDs, e.g. `123456789,987654321`. This is the bot's only access control, so an unset, empty, or partly non-numeric value **stops the bot at startup** rather than quietly leaving it open — see [Scope and responsible use](#scope-and-responsible-use) |
+| `ALLOW_PUBLIC` | *unset* | Set to `1` to run a deliberately public bot. It exists so that the safe direction is the one that needs no action: without it, a bot with no allow-list refuses to start |
 | `PORT`, then `HEALTH_PORT` | `8080` | Port for the aiohttp health & metrics server. `PORT` is checked first and takes precedence, which is what Render's injected value relies on |
 | `HEALTH_BIND` | `127.0.0.1` | Network interface to bind the health server (`0.0.0.0` in Docker) |
 | `SUBPROCESS_TIMEOUT` | `180` | Timeout in seconds for **one extraction attempt**. A request makes up to three `yt-dlp` attempts plus one `gallery-dl` attempt, so the worst case for a single link is roughly four times this, not this |
@@ -226,8 +233,8 @@ re-registers it with Telegram during startup.
 
 This repository includes a `render.yaml` blueprint:
 1. Connect your repository on [Render](https://render.com).
-2. When prompted, set the `BOT_TOKEN` secret and the `ALLOWED_USERS` allow-list.
-   An empty allow-list deploys a public bot.
+2. When prompted, set the `BOT_TOKEN` secret and the `ALLOWED_USERS` allow-list. A
+   deploy with no allow-list refuses to start; that is the intended behaviour.
 3. The webhook URL is configured automatically via `RENDER_EXTERNAL_HOSTNAME`.
 
 ---

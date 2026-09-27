@@ -28,6 +28,11 @@ from core.downloader_wrapper import DownloaderWrapper
 @pytest.fixture(autouse=True)
 def reset_routers_and_settings(monkeypatch):
     monkeypatch.setattr(settings, "BOT_TOKEN", "123:MOCK_TOKEN")
+    # main() calls settings.validate(), which refuses to start without an allow-list
+    # unless ALLOW_PUBLIC is set. These tests are about the lifecycle, not the allow-list,
+    # so they opt into a public bot the way an operator would.
+    monkeypatch.setattr(settings, "ALLOWED_USERS", [])
+    monkeypatch.setattr(settings, "ALLOW_PUBLIC", True)
     commands.router._parent_router = None
     download.router._parent_router = None
     yield
