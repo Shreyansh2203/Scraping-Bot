@@ -163,6 +163,27 @@ def _install_signal_handlers(
             logger.warning("Could not install %s handler: %s", sig.name, exc)
 
 
+def _build_dispatcher(downloader: DownloaderWrapper) -> Dispatcher:
+    """Assemble the dispatcher the bot serves updates with.
+
+    Extracted so the middleware order is something a test can assert on rather than
+    an accident of ``main``'s body: ``AuthMiddleware`` and ``ThrottleMiddleware`` are
+    the only access control and the only rate limit the bot has, and neither does
+    anything if it is not registered here.
+    """
+    dp = Dispatcher()
+    dp["downloader"] = downloader
+    dp.startup.register(on_startup)
+    dp.include_router(commands.router)
+    dp.include_router(download.router)
+
+    # Register Auth before Throttle, so an unauthorised message is answered with
+    # "Unauthorized" rather than "Slow down", and never reaches a handler.
+    dp.message.middleware(throttle.AuthMiddleware())
+    dp.message.middleware(throttle.ThrottleMiddleware())
+    return dp
+
+
 async def main() -> None:
     log_path = Path("bot.log").resolve()
     handler = logging.StreamHandler(sys.stdout)
@@ -187,15 +208,7 @@ async def main() -> None:
         ffprobe_timeout=settings.FFPROBE_TIMEOUT,
     )
 
-    dp = Dispatcher()
-    dp["downloader"] = downloader
-    dp.startup.register(on_startup)
-    dp.include_router(commands.router)
-    dp.include_router(download.router)
-
-    # Register Auth before Throttle
-    dp.message.middleware(throttle.AuthMiddleware())
-    dp.message.middleware(throttle.ThrottleMiddleware())
+    dp = _build_dispatcher(downloader)
 
     app = web.Application()
     app[DOWNLOADER_KEY] = downloader

@@ -1,11 +1,16 @@
 import time
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiogram.types import Message, User
+from aiogram import Dispatcher
+from aiogram.types import Chat, Message, Update, User
 
+from bot.handlers import commands, download
+from bot.main import _build_dispatcher
 from bot.middlewares.throttle import AuthMiddleware, ThrottleMiddleware
 from core.config import settings
+from core.downloader_wrapper import DownloaderWrapper
 
 
 @pytest.fixture
@@ -128,3 +133,99 @@ async def test_auth_middleware_non_message_event():
     res = await middleware(handler, event, {})
     assert res == "passed"
     handler.assert_called_once_with(event, {})
+
+
+def test_throttle_default_allows_about_one_request_per_second():
+    """Pin the rate the bot is actually wired with, not just the one tests pass in.
+
+    Every other test constructs ThrottleMiddleware with an explicit rate_limit, so a
+    change to the default -- the value bot/main.py registers -- was invisible.
+    """
+    assert ThrottleMiddleware().rate_limit == 1.0
+
+
+_CHAT = Chat(id=500, type="private")
+
+
+class _EchoBot:
+    """Stands in for aiogram's Bot: records the text of every reply the bot sends."""
+
+    id = 777
+
+    def __init__(self):
+        self.sent: list[str] = []
+
+    async def __call__(self, method, *args, **kwargs):
+        self.sent.append(getattr(method, "text", ""))
+        return MagicMock(
+            message_id=1,
+            date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            chat=_CHAT,
+        )
+
+
+def _dispatcher_like_main() -> Dispatcher:
+    """The dispatcher bot/main.py actually serves updates with.
+
+    Deliberately built by calling the production factory rather than by repeating its
+    wiring here: a test that reassembles the dispatcher itself proves nothing about
+    whether main() registers the middlewares. aiogram refuses to re-parent a router, so
+    the shared module-level routers are detached first and left attached afterwards --
+    detaching afterwards would sever the link the outer middlewares resolve through.
+    """
+    commands.router._parent_router = None
+    download.router._parent_router = None
+    return _build_dispatcher(MagicMock(spec=DownloaderWrapper))
+
+
+async def _feed(texts_and_users, same_dispatcher: bool = False) -> list[list[str]]:
+    """Push updates through a Dispatcher assembled exactly as bot/main.py assembles it.
+
+    ``same_dispatcher`` keeps one Dispatcher across the updates, which is what the
+    throttle test needs: its state lives on the middleware instance.
+    """
+    dp = _dispatcher_like_main()
+    results: list[list[str]] = []
+    for index, (text, user_id) in enumerate(texts_and_users, start=1):
+        bot = _EchoBot()
+        update = Update(
+            update_id=index,
+            message=Message(
+                message_id=index,
+                date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                chat=_CHAT,
+                from_user=User(id=user_id, is_bot=False, first_name="Tester"),
+                text=text,
+            ),
+        )
+        if not same_dispatcher:
+            dp = _dispatcher_like_main()
+        await dp.feed_update(bot, update)
+        results.append(bot.sent)
+    return results
+
+
+async def test_auth_middleware_is_wired_onto_the_dispatcher(monkeypatch):
+    """ALLOWED_USERS is the bot's only access control; prove it is actually registered.
+
+    The middleware classes are unit tested, which says nothing about whether
+    bot/main.py installs them. Deleting either registration line used to leave the
+    whole suite green.
+    """
+    monkeypatch.setattr(settings, "ALLOWED_USERS", [999])
+
+    blocked, allowed = await _feed([("/start", 12345), ("/start", 999)])
+
+    assert blocked == ["⛔ Unauthorized."], "an unlisted user was not stopped by the dispatcher"
+    assert allowed and allowed != ["⛔ Unauthorized."], "a listed user was blocked"
+
+
+async def test_throttle_middleware_is_wired_onto_the_dispatcher(monkeypatch):
+    monkeypatch.setattr(settings, "ALLOWED_USERS", [])
+
+    first, second = await _feed([("/help", 4242), ("/help", 4242)], same_dispatcher=True)
+
+    assert len(first) == 1 and not first[0].startswith("⚠️")
+    assert second == [
+        "⚠️ Slow down! Please wait a moment."
+    ], "the second rapid message from one user was not throttled by the dispatcher"

@@ -261,6 +261,37 @@ async def test_process_download_trailing_single_item_chunk(mock_message, tmp_pat
     assert "Part 2/2" in mock_message.reply_photo.call_args.kwargs["caption"]
 
 
+async def test_process_download_always_removes_the_job_directory(mock_message, tmp_path):
+    """The README promises the throwaway directory is deleted once the file is sent.
+
+    Deleting the cleanup() call in the finally block used to leave all 178 tests
+    green, so nothing observed a job directory that survives its own delivery.
+    """
+    job_dir = tmp_path / "job_abc123"
+    job_dir.mkdir()
+    video_file = job_dir / "video.mp4"
+    video_file.write_bytes(b"x" * 1024)
+
+    status_msg = MagicMock(spec=Message)
+    status_msg.edit_text = AsyncMock()
+    mock_message.reply.return_value = status_msg
+
+    downloader = MagicMock(spec=DownloaderWrapper)
+    downloader.download_url = AsyncMock(
+        return_value=DownloadResult(
+            success=True,
+            file_paths=[video_file],
+            size=1024,
+            verified=True,
+            job_dir=job_dir,
+        )
+    )
+
+    await _process_download(mock_message, downloader, "https://x.com/user/status/123", 12345)
+
+    assert not job_dir.exists(), "the job directory outlived the delivery"
+
+
 async def test_process_download_escapes_html_in_error_caption(mock_message):
     status_msg = MagicMock(spec=Message)
     status_msg.edit_text = AsyncMock()

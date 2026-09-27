@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import os
 import signal
@@ -220,7 +221,8 @@ def _gallery_dl_stub(files):
 
 
 async def test_run_gallery_dl_success(tmp_path):
-    wrapper = DownloaderWrapper(output_dir=tmp_path)
+    # min_file_size=0 keeps this test about collection; the floor has its own tests.
+    wrapper = DownloaderWrapper(output_dir=tmp_path, min_file_size=0)
     job_dir = tmp_path / "job_test"
     job_dir.mkdir()
 
@@ -234,7 +236,7 @@ async def test_run_gallery_dl_success(tmp_path):
 
 
 async def test_run_gallery_dl_ignores_artifacts_of_previous_attempt(tmp_path):
-    wrapper = DownloaderWrapper(output_dir=tmp_path)
+    wrapper = DownloaderWrapper(output_dir=tmp_path, min_file_size=0)
     job_dir = tmp_path / "job_test"
     job_dir.mkdir()
     stale = job_dir / "yt_dlp_partial.mp4"
@@ -286,7 +288,7 @@ async def test_run_gallery_dl_no_supported_files(tmp_path):
 
 
 async def test_run_gallery_dl_flattens_nested_dirs(tmp_path):
-    wrapper = DownloaderWrapper(output_dir=tmp_path)
+    wrapper = DownloaderWrapper(output_dir=tmp_path, min_file_size=0)
     job_dir = tmp_path / "job_test"
     job_dir.mkdir()
 
@@ -314,6 +316,81 @@ async def test_run_gallery_dl_nonzero_exit(tmp_path):
         res = await wrapper._run_gallery_dl("https://instagram.com/p/ABC", job_dir)
         assert res.success is False
         assert "gallery-dl failed" in res.error
+
+
+async def test_run_gallery_dl_applies_the_same_min_file_size_floor_as_yt_dlp(tmp_path):
+    """The yt-dlp path refuses a file under min_file_size; the fallback used to accept it.
+
+    A post whose only download is a 10-byte stub is a failed download, and reporting it
+    as a success sends an unusable file to Telegram.
+    """
+    wrapper = DownloaderWrapper(output_dir=tmp_path, min_file_size=5000)
+    job_dir = tmp_path / "job_test"
+    job_dir.mkdir()
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        mock_exec.side_effect = _gallery_dl_stub({"post/tiny.jpg": b"0123456789"})
+
+        res = await wrapper._run_gallery_dl("https://instagram.com/p/ABC", job_dir)
+
+    assert res.success is False
+    assert res.file_paths == []
+    assert res.size == 0
+    assert "File too small" in res.error
+    assert not (job_dir / "gallery_dl" / "tiny.jpg").exists()
+
+
+async def test_run_gallery_dl_keeps_the_pages_of_a_mixed_post_that_meet_the_floor(tmp_path):
+    wrapper = DownloaderWrapper(output_dir=tmp_path, min_file_size=1000)
+    job_dir = tmp_path / "job_test"
+    job_dir.mkdir()
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        mock_exec.side_effect = _gallery_dl_stub(
+            {
+                "post/real1.jpg": b"x" * 2048,
+                "post/stub.jpg": b"x" * 10,
+                "post/real2.jpg": b"y" * 4096,
+            }
+        )
+
+        res = await wrapper._run_gallery_dl("https://instagram.com/p/ABC", job_dir)
+
+    assert res.success is True
+    assert [p.name for p in res.file_paths] == ["real1.jpg", "real2.jpg"]
+    assert res.size == 2048 + 4096
+    assert not (job_dir / "gallery_dl" / "stub.jpg").exists()
+
+
+async def test_download_url_fails_the_whole_job_when_the_fallback_returns_only_a_stub(tmp_path):
+    """End to end: yt-dlp fails, gallery-dl yields 10 bytes, min_file_size is 5000."""
+    wrapper = DownloaderWrapper(output_dir=tmp_path, min_file_size=5000)
+
+    async def exec_stub(*args, **kwargs):
+        proc = MagicMock()
+        if "gallery_dl" in args:
+            target = Path(args[args.index("--directory") + 1])
+            (target / "tiny.jpg").write_bytes(b"0123456789")
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.returncode = 0
+        else:
+            proc.communicate = AsyncMock(return_value=(b"", b"ERROR: Private video"))
+            proc.returncode = 1
+        return proc
+
+    with (
+        patch("asyncio.create_subprocess_exec", side_effect=exec_stub),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        res = await wrapper.download_url("https://instagram.com/p/ABC", 1)
+
+    assert res.success is False
+    assert res.file_paths == []
+    assert res.size == 0
+    # The job must not report success. Which message survives is a separate matter:
+    # _download_async prefers the yt-dlp error over the fallback's, so the reason the
+    # fallback gave is discarded whenever yt-dlp also failed.
+    assert res.error
 
 
 async def test_download_async_success(tmp_path):
@@ -735,7 +812,7 @@ async def test_probe_resolution_swallows_a_probe_that_cannot_start(tmp_path):
 
 
 async def test_run_gallery_dl_keeps_files_already_in_the_target_directory(tmp_path):
-    wrapper = DownloaderWrapper(output_dir=tmp_path)
+    wrapper = DownloaderWrapper(output_dir=tmp_path, min_file_size=0)
     job_dir = tmp_path / "job_test"
     job_dir.mkdir()
 
@@ -800,3 +877,23 @@ async def test_download_async_cleans_up_when_the_fallback_itself_raises(tmp_path
     assert res.success is False
     assert "gallery-dl exploded" in res.error
     assert list(tmp_path.iterdir()) == []
+
+
+async def test_download_async_removes_the_job_directory_when_shutdown_cancels_it(tmp_path):
+    """Shutdown drains by cancelling the in-flight task, and CancelledError is not an
+    Exception, so the `except Exception` cleanup never ran and the directory survived.
+
+    The container is torn down after the process exits, so the directory only really
+    leaks on a long-lived local or Render deployment that restarts in place.
+    """
+    wrapper = DownloaderWrapper(output_dir=tmp_path)
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = MagicMock()
+        proc.communicate = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_exec.return_value = proc
+
+        with pytest.raises(asyncio.CancelledError):
+            await wrapper.download_url("https://x.com/user/status/1", 1)
+
+    assert list(tmp_path.iterdir()) == [], "a cancelled job left its directory behind"

@@ -260,6 +260,13 @@ class DownloaderWrapper:
             shutil.rmtree(job_dir, ignore_errors=True)
             return DownloadResult(success=False, error=str(exc))
 
+        except asyncio.CancelledError:
+            # Shutdown drains active downloads by cancelling them, and CancelledError
+            # is a BaseException, so the handler above never runs and the job directory
+            # would survive the process. Nothing will ever read it: the caller is gone.
+            shutil.rmtree(job_dir, ignore_errors=True)
+            raise
+
     async def _run_gallery_dl(self, url: str, job_dir: Path) -> DownloadResult:
         target_dir = job_dir / "gallery_dl"
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -316,6 +323,28 @@ class DownloaderWrapper:
 
         if not downloaded_files:
             return DownloadResult(success=False, error="gallery-dl returned no supported files")
+
+        # The yt-dlp path rejects a file under min_file_size, so the fallback has to
+        # apply the same floor: a post whose only download is a truncated stub is a
+        # failed download, not a successful one. A post that mixes a stub with real
+        # pages keeps the real ones.
+        undersized = [
+            path
+            for path in downloaded_files
+            if path.exists() and path.stat().st_size < self.min_file_size
+        ]
+        for path in undersized:
+            path.unlink(missing_ok=True)
+        downloaded_files = [path for path in downloaded_files if path not in undersized]
+
+        if not downloaded_files:
+            return DownloadResult(
+                success=False,
+                error=(
+                    "File too small: every file gallery-dl returned was under "
+                    f"{self.min_file_size} bytes"
+                ),
+            )
 
         total_size = sum(f.stat().st_size for f in downloaded_files if f.exists())
 

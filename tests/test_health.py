@@ -1,6 +1,7 @@
 import importlib.metadata
 import json
 import logging
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -52,9 +53,24 @@ async def test_metrics_handler(mock_request):
     response = await metrics_handler(mock_request)
     assert response.status == 200
     text = response.text
-    assert "scraping_bot_uptime_seconds" in text
-    assert "scraping_bot_active_downloads" in text
-    assert "scraping_bot_concurrent_limit 2" in text
+    # Strip the # HELP / # TYPE comment lines: a substring check against the whole body
+    # is satisfied by the comment alone, so a renamed or deleted sample was invisible.
+    samples = {}
+    for line in text.splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        name, _, value = line.partition(" ")
+        samples[name] = value.strip()
+    assert sorted(samples) == [
+        "scraping_bot_active_downloads",
+        "scraping_bot_concurrent_limit",
+        "scraping_bot_uptime_seconds",
+    ], f"unexpected /metrics sample names: {sorted(samples)}"
+    for name, value in samples.items():
+        assert re.fullmatch(r"-?\d+(\.\d+)?([eE][-+]?\d+)?", value), (name, value)
+    for name in samples:
+        assert f"# HELP {name} " in text, f"no HELP line for {name}"
+        assert f"# TYPE {name} gauge" in text, f"{name} is not declared a gauge"
 
 
 async def test_uptime_is_measured_with_a_monotonic_clock(mock_request, monkeypatch):

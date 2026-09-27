@@ -42,7 +42,9 @@ before you attach a public hostname.
 Keep `CONCURRENT_DOWNLOADS` low (default `2`), keep `SUBPROCESS_TIMEOUT` and
 `MAX_FILE_SIZE_MB` conservative, and do not stand up a shared instance and circulate the
 link. The bot throttles each user to roughly one request per second and bounds concurrency
-globally, but neither of those is a licence to hammer an origin.
+globally, but neither of those is a licence to hammer an origin. Note that
+`SUBPROCESS_TIMEOUT` bounds a single attempt rather than a request: the worst case for one
+link is about four times that value, so a slot can be held for many minutes.
 
 ## Table of contents
 
@@ -186,11 +188,11 @@ Configure the application via environment variables or a `.env` file:
 | `BOT_TOKEN` | *required* | Telegram Bot API token from @BotFather |
 | `DOWNLOAD_DIR` | `./downloads` | Directory to store temporary job directories |
 | `CONCURRENT_DOWNLOADS` | `2` | Maximum concurrent downloads allowed |
-| `MAX_FILE_SIZE_MB` | `50` | Maximum size in MB for a single file; anything larger is rejected after download (Telegram Bot API limit is 50MB) |
+| `MAX_FILE_SIZE_MB` | `50` | Maximum size in MB for a single file; anything above this is rejected after download. Telegram's own limit is type-dependent — 10 MB for a photo, 50 MB for a video, audio and document — and this one flat cap is applied to every media type, so a photo between 10 MB and this value passes here and is refused by Telegram |
 | `ALLOWED_USERS` | *empty* | Comma-separated list of Telegram user IDs. **Empty means a public bot** — set it before exposing the bot, see [Scope and responsible use](#scope-and-responsible-use) |
 | `PORT`, then `HEALTH_PORT` | `8080` | Port for the aiohttp health & metrics server. `PORT` is checked first and takes precedence, which is what Render's injected value relies on |
 | `HEALTH_BIND` | `127.0.0.1` | Network interface to bind the health server (`0.0.0.0` in Docker) |
-| `SUBPROCESS_TIMEOUT` | `180` | Timeout in seconds for extraction subprocesses |
+| `SUBPROCESS_TIMEOUT` | `180` | Timeout in seconds for **one extraction attempt**. A request makes up to three `yt-dlp` attempts plus one `gallery-dl` attempt, so the worst case for a single link is roughly four times this, not this |
 | `FFPROBE_TIMEOUT` | `10` | Timeout in seconds for ffprobe metadata probing |
 | `BOT_MODE` | *empty* | Set to `polling` to force long polling and ignore `WEBHOOK_URL`; useful for local development or hosts without a public URL |
 | `WEBHOOK_URL` | *derived* | Overrides the webhook endpoint. Defaults to `https://$RENDER_EXTERNAL_HOSTNAME/webhook` when that is set, otherwise empty (long polling) |
