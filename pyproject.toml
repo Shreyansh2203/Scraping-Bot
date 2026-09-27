@@ -67,10 +67,13 @@ testpaths = ["tests"]
 addopts = "-v --tb=short --cov=bot --cov=core --cov-report=term-missing"
 
 [tool.coverage.report]
-fail_under = 80
+# The suite covers every statement in bot/ and core/ (100% as of the test additions
+# that closed the downloader's error and fallback branches). The floor sits a little
+# under that so adding a file does not immediately require a test for every line in
+# it, but it is high enough that any real regression fails the build.
+fail_under = 98
 show_missing = true
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",
-    "raise NotImplementedError",
 ]
