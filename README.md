@@ -59,6 +59,7 @@ globally, but neither of those is a licence to hammer an origin.
 - [Observability](#observability)
 - [Deployment on Render](#deployment-on-render)
 - [Contributing](#contributing)
+- [Portfolio](#portfolio)
 - [License](#license)
 
 ## The problem
@@ -226,6 +227,17 @@ This repository includes a `render.yaml` blueprint:
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflows and coding standards, and
 [SECURITY.md](SECURITY.md) for how to report a vulnerability and what to expect when
 running the bot against untrusted media.
+
+## Portfolio
+
+Part of a small set of personal projects:
+
+| Repository | What it is |
+|---|---|
+| [Merge-TIFF](https://github.com/Shreyansh2203/Merge-TIFF) | Browser tool that merges multiple TIFF images into a single multi-page `.tif`; a serverless function does the work with Pillow so the page never handles the files directly. |
+| [Oracle BIP Reconciler](https://github.com/Shreyansh2203/oracle-bip-reconciler) | FastAPI service that reconciles payment and remittance ledger rows — often OCR of a paper advice — against invoice and receipt history in Oracle Fusion ERP Cloud BI Publisher. |
+| [OTL Timesheet Assistant](https://github.com/Shreyansh2203/OTL-Voice) | React/FastAPI PWA that turns a spoken shift description into a validated timecard proposal for Oracle Fusion Cloud Time and Labour; nothing is written to Oracle until you approve it. |
+| [Oracle Fusion Product Comparison Advisor](https://github.com/Shreyansh2203/Product-Comparison-Advisor-AI-Agent) | Agent configuration for automating product-comparison workflows in Oracle Fusion Supply Chain Management. |
 
 ## License
 
