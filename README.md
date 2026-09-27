@@ -53,6 +53,8 @@ globally, but neither of those is a licence to hammer an origin.
 - [Features](#features)
 - [Requirements](#requirements)
 - [Installation](#installation)
+  - [Using Docker (Recommended)](#using-docker-recommended)
+  - [Local Development](#local-development)
 - [Configuration](#configuration)
 - [Observability](#observability)
 - [Deployment on Render](#deployment-on-render)

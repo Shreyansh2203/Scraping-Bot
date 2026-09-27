@@ -20,12 +20,28 @@
       "type": "fix"
     },
     {
+      "section": "Performance",
+      "type": "perf"
+    },
+    {
       "section": "Documentation",
       "type": "docs"
     },
     {
       "section": "Dependencies",
       "type": "chore(deps)"
+    },
+    {
+      "section": "Tests",
+      "type": "test"
+    },
+    {
+      "section": "CI",
+      "type": "ci"
+    },
+    {
+      "section": "Build",
+      "type": "build"
     },
     {
       "section": "Maintenance",

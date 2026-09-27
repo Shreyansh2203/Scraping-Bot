@@ -1,30 +1,39 @@
+# Render blueprint for the bot. See the README for what each variable does.
+#
+#   PORT and RENDER_EXTERNAL_HOSTNAME are deliberately absent: Render injects both at
+#   runtime, and PORT is what core/config.py prefers over HEALTH_PORT.
+#   WEBHOOK_URL is deliberately absent for the same reason: it is derived from the
+#   injected RENDER_EXTERNAL_HOSTNAME by core/config.py, and setting it to an empty
+#   string is what selects long polling instead of the webhook Render expects.
+#   BOT_MODE is deliberately absent: webhook is the correct mode on Render, and
+#   BOT_MODE=polling is the escape hatch for platforms with no inbound URL.
+#   HEALTH_PORT is deliberately absent: it is superseded by the injected PORT, which
+#   core/config.py prefers and which Render always sets.
+
 services:
   - type: web
-    name: tg-video-dl-bot
+    name: scraping-bot
     runtime: docker
     plan: free
-    branch: main
-    rootDir: .
-    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+
     envVars:
       - key: BOT_TOKEN
         sync: false
+      - key: ALLOWED_USERS
+        # Never `value: ""`. An empty allow-list is a public bot, and Render would
+        # overwrite a value entered in the dashboard on every sync. sync: false leaves
+        # the variable out of Blueprint management so the dashboard value stands.
+        sync: false
+      - key: HEALTH_BIND
+        value: 0.0.0.0
       - key: DOWNLOAD_DIR
         value: /app/downloads
       - key: CONCURRENT_DOWNLOADS
-        value: "2"
+        value: 2
       - key: MAX_FILE_SIZE_MB
-        value: "50"
-      - key: ALLOWED_USERS
-        # Prompted once when the blueprint is first applied; Render then ignores the
-        # key and preserves whatever the dashboard holds. Leave empty for a public bot.
-        sync: false
+        value: 50
       - key: SUBPROCESS_TIMEOUT
-        value: "180"
+        value: 300
       - key: FFPROBE_TIMEOUT
-        value: "10"
-      - key: HEALTH_BIND
-        value: "0.0.0.0"
-      # PORT and RENDER_EXTERNAL_HOSTNAME are deliberately absent: Render injects
-      # both, and core/config.py prefers PORT over HEALTH_PORT for the health server.
-    healthCheckPath: /health
+        value: 10
