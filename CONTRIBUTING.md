@@ -22,6 +22,22 @@ make lint
 make test
 ```
 
+## Dependency Scanning
+
+`pip-audit` is part of the dev extras and checks the dependencies declared in
+`pyproject.toml` against the PyPA advisory database:
+
+```bash
+pip install ".[dev]"
+pip-audit --progress-spinner off .
+```
+
+CI runs the same command on every push and pull request, and a scheduled weekly
+workflow re-runs it against `main` to catch advisories published after a branch was cut.
+Pull requests additionally get a dependency review, which fails on a vulnerable or
+badly licensed package entering through the diff. Dependabot opens the upgrade PRs for
+the Python dependencies, the GitHub Actions, and the Docker base image.
+
 ## Pull Request Process
 
 1. Create a descriptive branch name.
