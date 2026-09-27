@@ -239,7 +239,7 @@ Part of a small set of personal projects:
 | [Merge-TIFF](https://github.com/Shreyansh2203/Merge-TIFF) | Browser tool that merges multiple TIFF images into a single multi-page `.tif`; a serverless function does the work with Pillow so the page never handles the files directly. |
 | [Oracle BIP Reconciler](https://github.com/Shreyansh2203/oracle-bip-reconciler) | FastAPI service that reconciles payment and remittance ledger rows — often OCR of a paper advice — against invoice and receipt history in Oracle Fusion ERP Cloud BI Publisher. |
 | [OTL Timesheet Assistant](https://github.com/Shreyansh2203/OTL-Voice) | React/FastAPI PWA that turns a spoken shift description into a validated timecard proposal for Oracle Fusion Cloud Time and Labour; nothing is written to Oracle until you approve it. |
-| [Oracle Fusion Product Comparison Advisor](https://github.com/Shreyansh2203/Product-Comparison-Advisor-AI-Agent) | Agent configuration for automating product-comparison workflows in Oracle Fusion Supply Chain Management. |
+| [Oracle Fusion Product Comparison Advisor](https://github.com/Shreyansh2203/Product-Comparison-Advisor---AI-Agent) | Agent configuration for automating product-comparison workflows in Oracle Fusion Supply Chain Management. |
 
 ## License
 
