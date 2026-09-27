@@ -135,10 +135,12 @@ Configure the application via environment variables or a `.env` file:
 | `CONCURRENT_DOWNLOADS` | `2` | Maximum concurrent downloads allowed |
 | `MAX_FILE_SIZE_MB` | `50` | Maximum size in MB for a single file; anything larger is rejected after download (Telegram Bot API limit is 50MB) |
 | `ALLOWED_USERS` | *empty* | Comma-separated list of Telegram user IDs (empty = public bot) |
-| `PORT` or `HEALTH_PORT` | `8080` | Port for the aiohttp health & metrics server |
+| `PORT`, then `HEALTH_PORT` | `8080` | Port for the aiohttp health & metrics server. `PORT` is checked first and takes precedence, which is what Render's injected value relies on |
 | `HEALTH_BIND` | `127.0.0.1` | Network interface to bind the health server (`0.0.0.0` in Docker) |
 | `SUBPROCESS_TIMEOUT` | `180` | Timeout in seconds for extraction subprocesses |
 | `FFPROBE_TIMEOUT` | `10` | Timeout in seconds for ffprobe metadata probing |
+| `BOT_MODE` | *empty* | Set to `polling` to force long polling and ignore `WEBHOOK_URL`; useful for local development or hosts without a public URL |
+| `WEBHOOK_URL` | *derived* | Overrides the webhook endpoint. Defaults to `https://$RENDER_EXTERNAL_HOSTNAME/webhook` when that is set, otherwise empty (long polling) |
 | `RENDER_EXTERNAL_HOSTNAME`| *empty* | If set, switches bot from long polling to webhook mode |
 
 ---

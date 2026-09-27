@@ -25,6 +25,10 @@
     },
     {
       "section": "Dependencies",
+      "type": "chore(deps)"
+    },
+    {
+      "section": "Maintenance",
       "type": "chore"
     }
   ]
