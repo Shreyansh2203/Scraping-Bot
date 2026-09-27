@@ -2,7 +2,8 @@
   "packages": {
     ".": {
       "package-name": "scraping-bot",
-      "release-type": "python"
+      "release-type": "python",
+      "changelog-path": "CHANGELOG.md"
     }
   },
   "changelog-sections": [
