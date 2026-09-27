@@ -47,9 +47,18 @@ class AuthMiddleware(BaseMiddleware):
         if not isinstance(event, Message):
             return await handler(event, data)
 
-        if settings.ALLOWED_USERS:
-            user_id = event.from_user.id if event.from_user else 0
-            if user_id not in settings.ALLOWED_USERS:
+        # An empty allow-list denies everyone unless an operator has explicitly opted in
+        # to a public bot. Reading truthiness of ALLOWED_USERS alone made every malformed
+        # value (an unparsable ID, a stray comma, whitespace) open the bot to everyone,
+        # because the check was skipped rather than failed.
+        if not settings.ALLOWED_USERS:
+            if not settings.ALLOW_PUBLIC:
                 await event.reply("⛔ Unauthorized.")
                 return
+            return await handler(event, data)
+
+        user_id = event.from_user.id if event.from_user else 0
+        if user_id not in settings.ALLOWED_USERS:
+            await event.reply("⛔ Unauthorized.")
+            return
         return await handler(event, data)

@@ -92,8 +92,27 @@ def test_throttle_cleanup_max_size():
     assert 4 not in middleware.last_request
 
 
-async def test_auth_middleware_public_mode(mock_message, monkeypatch):
+async def test_auth_middleware_empty_allow_list_denies_by_default(mock_message, monkeypatch):
+    # An empty allow-list must deny everyone. It used to be treated as "no restriction",
+    # which meant every value that failed to parse (a stray comma, a non-numeric ID,
+    # whitespace) silently opened the bot to every caller.
     monkeypatch.setattr(settings, "ALLOWED_USERS", [])
+    monkeypatch.setattr(settings, "ALLOW_PUBLIC", False)
+    middleware = AuthMiddleware()
+    handler = AsyncMock(return_value="allowed")
+
+    res = await middleware(handler, mock_message, {})
+    assert res is None
+    handler.assert_not_called()
+    mock_message.reply.assert_called_once_with("⛔ Unauthorized.")
+
+
+async def test_auth_middleware_empty_list_allows_when_public_opted_in(
+    mock_message,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "ALLOWED_USERS", [])
+    monkeypatch.setattr(settings, "ALLOW_PUBLIC", True)
     middleware = AuthMiddleware()
     handler = AsyncMock(return_value="allowed")
 
@@ -101,6 +120,21 @@ async def test_auth_middleware_public_mode(mock_message, monkeypatch):
     assert res == "allowed"
     handler.assert_called_once()
     assert mock_message.reply.call_count == 0
+
+
+async def test_auth_middleware_malformed_allow_list_never_reaches_the_handler(
+    mock_message,
+    monkeypatch,
+):
+    # The end-to-end shape of the original defect: config parsing yields an empty list
+    # and the middleware must refuse rather than wave the caller through.
+    monkeypatch.setattr(settings, "ALLOWED_USERS", [])
+    monkeypatch.setattr(settings, "ALLOW_PUBLIC", False)
+    middleware = AuthMiddleware()
+    handler = AsyncMock(return_value="allowed")
+
+    await middleware(handler, mock_message, {})
+    handler.assert_not_called()
 
 
 async def test_auth_middleware_authorized_user(mock_message, monkeypatch):
@@ -221,7 +255,10 @@ async def test_auth_middleware_is_wired_onto_the_dispatcher(monkeypatch):
 
 
 async def test_throttle_middleware_is_wired_onto_the_dispatcher(monkeypatch):
+    # Auth denies by default on an empty allow-list, so opt in here: this test is about
+    # the throttle being wired onto the dispatcher, not about who is allowed to call it.
     monkeypatch.setattr(settings, "ALLOWED_USERS", [])
+    monkeypatch.setattr(settings, "ALLOW_PUBLIC", True)
 
     first, second = await _feed([("/help", 4242), ("/help", 4242)], same_dispatcher=True)
 
