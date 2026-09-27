@@ -10,7 +10,7 @@ from bot.main import (
     DOWNLOADER_KEY,
     JsonFormatter,
     __version__,
-    _handle_sigterm,
+    _raise_system_exit,
     _resolve_version,
     health_handler,
     metrics_handler,
@@ -146,6 +146,6 @@ async def test_on_startup_polling(monkeypatch):
     bot.delete_webhook.assert_called_once_with(drop_pending_updates=False)
 
 
-def test_handle_sigterm():
+def test_signal_fallback_exits_without_loop_support():
     with pytest.raises(SystemExit):
-        _handle_sigterm(15, None)
+        _raise_system_exit(15, None)

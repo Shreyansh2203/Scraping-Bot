@@ -7,9 +7,11 @@ import logging
 import signal
 import sys
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
+from types import FrameType
 from typing import Any
 
 from aiogram import Bot, Dispatcher
@@ -108,6 +110,59 @@ async def _shutdown(
         logging.getLogger().removeHandler(log_handler)
 
 
+def _raise_system_exit(signum: int, frame: FrameType | None) -> None:
+    """Interpreter-level fallback for platforms without loop-level signal handlers."""
+    raise SystemExit(0)
+
+
+def _make_shutdown_handler(main_task: asyncio.Task[Any]) -> Callable[[signal.Signals], None]:
+    """Build the one-shot callback that cancels the main task on SIGTERM/SIGINT.
+
+    Cancelling unwinds ``main`` through its ``finally`` block, so the download drain
+    and the resource cleanup always run. A signal raised from a ``signal.signal``
+    handler instead jumps out of the event loop mid-step, which skips that block
+    entirely. Repeat signals are ignored so a second one cannot abort a drain that is
+    already under way; the platform SIGKILLs a process that overruns its grace period.
+    """
+    requested = False
+
+    def request_shutdown(sig: signal.Signals) -> None:
+        nonlocal requested
+        if requested or main_task.done():
+            return
+        requested = True
+        logging.getLogger("bot.main").info(
+            "Received %s, draining active downloads before shutdown", sig.name
+        )
+        main_task.cancel()
+
+    return request_shutdown
+
+
+def _install_signal_handlers(
+    loop: asyncio.AbstractEventLoop, main_task: asyncio.Task[Any] | None
+) -> None:
+    """Route SIGTERM/SIGINT through the loop so shutdown runs ``main``'s ``finally``.
+
+    Loop-level signal handlers are POSIX-only. Elsewhere the interpreter-level handler
+    is installed instead, which still stops the process, so the bot keeps running as
+    before on platforms without ``add_signal_handler``.
+    """
+    if main_task is None:
+        return
+
+    logger = logging.getLogger("bot.main")
+    request_shutdown = _make_shutdown_handler(main_task)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, request_shutdown, sig)
+        except NotImplementedError:
+            with suppress(ValueError, OSError, RuntimeError):
+                signal.signal(sig, _raise_system_exit)
+        except (RuntimeError, ValueError) as exc:
+            logger.warning("Could not install %s handler: %s", sig.name, exc)
+
+
 async def main() -> None:
     log_path = Path("bot.log").resolve()
     handler = logging.StreamHandler(sys.stdout)
@@ -168,6 +223,7 @@ async def main() -> None:
     )
 
     try:
+        _install_signal_handlers(asyncio.get_running_loop(), asyncio.current_task())
         if use_webhook:
             with suppress(asyncio.CancelledError):
                 while True:
@@ -178,14 +234,8 @@ async def main() -> None:
         await _shutdown(downloader, runner, bot, (handler, file_handler))
 
 
-def _handle_sigterm(signum: int, frame: Any) -> None:
-    raise SystemExit(0)
-
-
 if __name__ == "__main__":
-    if hasattr(signal, "SIGTERM"):
-        signal.signal(signal.SIGTERM, _handle_sigterm)
     try:
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
+    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
         print("Bot stopped.")

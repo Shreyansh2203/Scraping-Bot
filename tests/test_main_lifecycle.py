@@ -1,12 +1,21 @@
 import asyncio
 import logging
+import signal
+from collections.abc import Callable
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp import web
 
 from bot.handlers import commands, download
-from bot.main import _shutdown, main
+from bot.main import (
+    _install_signal_handlers,
+    _make_shutdown_handler,
+    _raise_system_exit,
+    _shutdown,
+    main,
+)
 from core.config import settings
 from core.downloader_wrapper import DownloaderWrapper
 
@@ -93,3 +102,113 @@ async def test_shutdown_drains_tasks_and_releases_resources():
     stream_handler.close.assert_called_once()
     file_handler.close.assert_called_once()
     assert root_logger.removeHandler.call_count == 2
+
+
+def test_shutdown_handler_cancels_main_task_only_once():
+    main_task = MagicMock(spec=asyncio.Task)
+    main_task.done.return_value = False
+    handler = _make_shutdown_handler(main_task)
+
+    handler(signal.SIGTERM)
+    handler(signal.SIGINT)
+
+    main_task.cancel.assert_called_once_with()
+
+
+def test_shutdown_handler_ignores_finished_task():
+    main_task = MagicMock(spec=asyncio.Task)
+    main_task.done.return_value = True
+
+    _make_shutdown_handler(main_task)(signal.SIGTERM)
+
+    main_task.cancel.assert_not_called()
+
+
+def test_install_signal_handlers_registers_termination_signals():
+    loop = MagicMock(spec=asyncio.AbstractEventLoop)
+    main_task = MagicMock(spec=asyncio.Task)
+
+    _install_signal_handlers(loop, main_task)
+
+    assert [call.args[0] for call in loop.add_signal_handler.call_args_list] == [
+        signal.SIGTERM,
+        signal.SIGINT,
+    ]
+
+
+def test_install_signal_handlers_falls_back_without_loop_support():
+    loop = MagicMock(spec=asyncio.AbstractEventLoop)
+    loop.add_signal_handler.side_effect = NotImplementedError
+    main_task = MagicMock(spec=asyncio.Task)
+
+    with patch("signal.signal") as mock_signal:
+        _install_signal_handlers(loop, main_task)
+
+    assert [call.args[0] for call in mock_signal.call_args_list] == [
+        signal.SIGTERM,
+        signal.SIGINT,
+    ]
+    assert all(call.args[1] is _raise_system_exit for call in mock_signal.call_args_list)
+
+
+def test_install_signal_handlers_swallows_registration_error():
+    loop = MagicMock(spec=asyncio.AbstractEventLoop)
+    loop.add_signal_handler.side_effect = RuntimeError("not in main thread")
+
+    _install_signal_handlers(loop, MagicMock(spec=asyncio.Task))
+
+
+def test_install_signal_handlers_without_a_current_task():
+    loop = MagicMock(spec=asyncio.AbstractEventLoop)
+
+    _install_signal_handlers(loop, None)
+
+    loop.add_signal_handler.assert_not_called()
+
+
+async def test_termination_signal_cancels_main_task_and_drains(monkeypatch):
+    monkeypatch.setattr(settings, "WEBHOOK_URL", "")
+
+    handlers: dict[signal.Signals, Callable[..., object]] = {}
+    handlers_ready = asyncio.Event()
+    cleanup = AsyncMock()
+
+    def fake_add_signal_handler(self, sig, callback, *args):
+        handlers[sig] = partial(callback, *args)
+        handlers_ready.set()
+
+    async def block_forever(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    site = MagicMock()
+    site.start = AsyncMock()
+    downloader = MagicMock()
+    bot = MagicMock()
+    bot.session.close = AsyncMock()
+
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(type(loop), "add_signal_handler", fake_add_signal_handler, raising=False)
+    monkeypatch.setattr(web.AppRunner, "setup", AsyncMock())
+    monkeypatch.setattr(web.AppRunner, "cleanup", cleanup)
+
+    with (
+        patch("bot.main.Bot", return_value=bot),
+        patch("bot.main.DownloaderWrapper", return_value=downloader),
+        patch("bot.main.Dispatcher.start_polling", new=block_forever),
+        patch("bot.main.web.TCPSite", return_value=site),
+    ):
+        main_task = asyncio.create_task(main())
+        await asyncio.wait_for(handlers_ready.wait(), timeout=5)
+
+        in_flight = asyncio.create_task(asyncio.sleep(0.01))
+        monkeypatch.setattr(download, "active_tasks", {in_flight})
+
+        handlers[signal.SIGTERM]()
+
+        with pytest.raises(asyncio.CancelledError):
+            await main_task
+
+    assert in_flight.done()
+    downloader.shutdown.assert_called_once()
+    cleanup.assert_awaited_once()
+    bot.session.close.assert_awaited_once()
