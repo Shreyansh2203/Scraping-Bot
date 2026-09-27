@@ -232,6 +232,8 @@ async def main() -> None:
         concurrent=settings.CONCURRENT_DOWNLOADS,
         subprocess_timeout=settings.SUBPROCESS_TIMEOUT,
         ffprobe_timeout=settings.FFPROBE_TIMEOUT,
+        max_file_size_mb=settings.MAX_FILE_SIZE_MB,
+        max_duration_seconds=settings.MAX_DURATION_SECONDS,
     )
 
     webhook_secret = _generate_webhook_secret()

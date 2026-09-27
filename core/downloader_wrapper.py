@@ -35,8 +35,47 @@ SUPPORTED_EXTENSIONS = {
     ".webp",
 }
 DEFAULT_MIN_FILE_SIZE = 1024  # 1KB for images
+DEFAULT_MAX_FILE_SIZE_MB = 50
+DEFAULT_MAX_DURATION_SECONDS = 600
+BYTES_PER_MB = 1024 * 1024
+
+# yt-dlp's own skip messages for a rejected download go to stdout, which -q silences, so
+# the request would be retried three times and then handed to gallery-dl -- a fallback
+# with no such bound, which would then download the same oversized file. Instead the
+# bot asks yt-dlp to print the size and duration it already knows, on its own line,
+# before it starts.
+#
+# The tag is what comes back on stdout: yt-dlp treats the leading "before_dl:" as the
+# print-time selector and strips it, so the template and the pattern cannot share a
+# prefix. The fields are JSON-encoded individually and pipe-delimited so a value can
+# never be confused with a filename, and "NA" is how yt-dlp renders a field it did not
+# report.
+_BOUND_PROBE_TAG = "scraping-bot-bound:"
+_BOUND_PROBE_TEMPLATE = f"before_dl:{_BOUND_PROBE_TAG}%(filesize)j|%(filesize_approx)j|%(duration)j"
+_BOUND_PROBE_RE = re.compile(re.escape(_BOUND_PROBE_TAG) + r"([^|\n]*)\|([^|\n]*)\|([^|\n]*)")
+
+# What a --max-filesize abort looks like from here. yt-dlp says "File is larger than
+# max-filesize ... Aborting" on stdout, which -q silences, and then exits 0 having
+# transferred nothing. The probe line still printed, so the download did start; the
+# after_move prints did not, so nothing came back. Retrying that is pointless -- the
+# condition is deterministic, not transient -- and gallery-dl is handed no bound at all.
+_TRANSFER_REFUSED = (
+    "Refusing to download: the extractor declined to transfer this file, which is what "
+    "yt-dlp does when --max-filesize is exceeded"
+)
 
 logger = logging.getLogger("downloader")
+
+
+def _probe_number(raw: str) -> Optional[int]:
+    """Read one field of the bound probe, or None when yt-dlp did not report it."""
+    raw = raw.strip()
+    if not raw or raw == "NA":
+        return None
+    try:
+        return int(float(raw))
+    except ValueError:
+        return None
 
 
 def _subprocess_kwargs() -> dict[str, Any]:
@@ -116,6 +155,8 @@ class DownloaderWrapper:
         timeout: int = 30,
         subprocess_timeout: int = 180,
         ffprobe_timeout: int = 10,
+        max_file_size_mb: int = DEFAULT_MAX_FILE_SIZE_MB,
+        max_duration_seconds: int = DEFAULT_MAX_DURATION_SECONDS,
     ):
         self.output_dir = output_dir
         self.concurrent = concurrent
@@ -123,6 +164,9 @@ class DownloaderWrapper:
         self.timeout = timeout
         self.subprocess_timeout = subprocess_timeout
         self.ffprobe_timeout = ffprobe_timeout
+        self.max_file_size_mb = max_file_size_mb
+        self.max_file_size_bytes = int(max_file_size_mb * BYTES_PER_MB)
+        self.max_duration_seconds = max_duration_seconds
         self.semaphore = asyncio.Semaphore(concurrent)
         self._shutdown = asyncio.Event()
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -144,6 +188,27 @@ class DownloaderWrapper:
         return re.sub(r"/+$", "", url)
 
     async def download_url(self, url: str, user_id: int) -> DownloadResult:
+        """Run one download, refusing outright when every slot is already taken.
+
+        ``asyncio.Semaphore`` queues, and a request makes up to three ``yt-dlp``
+        attempts plus one ``gallery-dl`` attempt, each bounded by ``subprocess_timeout``.
+        On Render that timeout is 300 s, so one unlucky link can hold a slot for twenty
+        minutes. Two of them park both slots and everyone else waits in a queue that
+        grows without a timeout of its own. Turning the wait into an immediate answer
+        costs the caller a retry and costs the bot its monopolisation.
+
+        There is no await between the ``locked()`` check and the acquire below:
+        ``Semaphore.acquire`` decrements and returns without yielding when the
+        semaphore is free, so the check cannot be raced by another task.
+        """
+        if self.semaphore.locked():
+            return DownloadResult(
+                success=False,
+                error=(
+                    f"All {self.concurrent} download slots are busy; try again in a "
+                    "moment rather than queueing behind the current requests"
+                ),
+            )
         async with self.semaphore:
             return await self._download_async(url, user_id)
 
@@ -162,10 +227,16 @@ class DownloaderWrapper:
         transient_errors = (TimeoutError, OSError, ConnectionError)
         last_error = ""
 
+        # The extractor that is still running, if any, and whether the job directory has
+        # to outlive this frame. Both exist so the finally below is the single place
+        # that kills a child and deletes a directory: an except clause is skipped by
+        # every BaseException the loop can raise at us, and CancelledError is one.
+        live_proc: Optional[asyncio.subprocess.Process] = None
+        keep_job_dir = False
+
         try:
             for attempt in range(max_retries + 1):
                 if self._shutdown.is_set():
-                    shutil.rmtree(job_dir, ignore_errors=True)
                     return DownloadResult(success=False, error="Download cancelled by shutdown")
 
                 cmd = self._build_command(url)
@@ -177,6 +248,7 @@ class DownloaderWrapper:
                         cwd=str(job_dir),
                         **_subprocess_kwargs(),
                     )
+                    live_proc = proc
                     try:
                         stdout_bytes, stderr_bytes = await asyncio.wait_for(
                             proc.communicate(), timeout=self.subprocess_timeout
@@ -194,17 +266,25 @@ class DownloaderWrapper:
                     if attempt < max_retries:
                         await asyncio.sleep(retry_delay * (2**attempt))
                         continue
-                    shutil.rmtree(job_dir, ignore_errors=True)
                     return DownloadResult(
                         success=False,
                         error=f"Transient error after {max_retries + 1} attempts: {last_error}",
                     )
                 except Exception as exc:
-                    shutil.rmtree(job_dir, ignore_errors=True)
                     return DownloadResult(success=False, error=str(exc))
 
                 combined = stdout + ("\n" + stderr if stderr else "")
                 result = self._parse_output(combined, returncode)
+
+                if not result.get("success"):
+                    # A failed attempt is not the place for the size verdict: a file that
+                    # did download stays on the success path, where the handler's
+                    # post-download MAX_FILE_SIZE_MB check still reports it to the user.
+                    refused = self._bound_refusal(result.get("bound"))
+                    if refused is None and result.get("transfer_refused"):
+                        refused = _TRANSFER_REFUSED
+                    if refused:
+                        return DownloadResult(success=False, error=refused)
 
                 if result.get("success") and result.get("file"):
                     raw = Path(result["file"])
@@ -230,6 +310,7 @@ class DownloaderWrapper:
                             result["success"] = False
                             result["error"] = f"File too small: {result['size']} bytes"
                         else:
+                            keep_job_dir = True
                             return DownloadResult(
                                 success=True,
                                 file_paths=[file_path],
@@ -249,23 +330,30 @@ class DownloaderWrapper:
             g_result = await self._run_gallery_dl(url, job_dir)
             if g_result.success:
                 g_result.job_dir = job_dir
+                keep_job_dir = True
                 return g_result
 
-            shutil.rmtree(job_dir, ignore_errors=True)
             return DownloadResult(
                 success=False, error=last_error or g_result.error or "Download failed"
             )
 
         except Exception as exc:
-            shutil.rmtree(job_dir, ignore_errors=True)
             return DownloadResult(success=False, error=str(exc))
 
-        except asyncio.CancelledError:
-            # Shutdown drains active downloads by cancelling them, and CancelledError
-            # is a BaseException, so the handler above never runs and the job directory
-            # would survive the process. Nothing will ever read it: the caller is gone.
-            shutil.rmtree(job_dir, ignore_errors=True)
-            raise
+        finally:
+            # An extractor that is still running has to die before the directory goes:
+            # on Windows the open handle keeps rmtree from deleting the partial file, and
+            # on POSIX the ffmpeg it spawned keeps writing to a path that no longer means
+            # anything. returncode is only set once the child has been reaped, so a
+            # process that finished normally -- or was already killed by the timeout
+            # handler above -- is left alone.
+            if live_proc is not None and live_proc.returncode is None:
+                try:
+                    await _terminate_tree(live_proc)
+                except Exception:
+                    logger.warning("Could not terminate the extractor process tree", exc_info=True)
+            if not keep_job_dir:
+                shutil.rmtree(job_dir, ignore_errors=True)
 
     async def _run_gallery_dl(self, url: str, job_dir: Path) -> DownloadResult:
         target_dir = job_dir / "gallery_dl"
@@ -356,6 +444,30 @@ class DownloaderWrapper:
             job_dir=job_dir,
         )
 
+    def _bound_refusal(self, bound: Any) -> Optional[str]:
+        """The user-facing reason to give up, when the extractor already said the media
+        is over the limit, or None when it did not.
+
+        Returning a reason here is what makes the refusal terminal: the caller does not
+        retry a request that is going to be refused identically every time, and does not
+        hand it to gallery-dl, which is not given either bound.
+        """
+        if not isinstance(bound, dict):
+            return None
+        size = bound.get("size")
+        duration = bound.get("duration")
+        if isinstance(size, int) and size > self.max_file_size_bytes:
+            return (
+                "Refusing to download: the file is larger than the "
+                f"{self.max_file_size_mb} MB limit"
+            )
+        if isinstance(duration, int) and duration > self.max_duration_seconds:
+            return (
+                "Refusing to download: the media is longer than the "
+                f"{self.max_duration_seconds}s limit"
+            )
+        return None
+
     def _build_command(self, url: str) -> list[str]:
         has_ffmpeg = shutil.which("ffmpeg") is not None
         fmt = (
@@ -388,6 +500,15 @@ class DownloaderWrapper:
             "0",
             "--socket-timeout",
             str(self.timeout),
+            # The byte ceiling. --max-filesize aborts the transfer as soon as the
+            # response advertises more than this, which is the case the size floor in
+            # bot/handlers/download.py cannot help with: it only runs once the file is
+            # already on disk, so without this a multi-gigabyte 4K stream writes until
+            # subprocess_timeout fires.
+            "--max-filesize",
+            str(self.max_file_size_bytes),
+            "--print",
+            _BOUND_PROBE_TEMPLATE,
             "--print",
             "after_move:filepath",
             "--print",
@@ -408,7 +529,26 @@ class DownloaderWrapper:
         return cmd
 
     def _parse_output(self, output: str, returncode: int) -> dict[str, Any]:
-        result: dict[str, Any] = {"success": False}
+        result: dict[str, Any] = {"success": False, "bound": {"size": None, "duration": None}}
+
+        # Lift the bound probe out of the stream before anything else looks at it, or it
+        # is counted as one of the fields the success path reads positionally.
+        lines: list[str] = []
+        probe_seen = False
+        for raw in output.split("\n"):
+            probe = _BOUND_PROBE_RE.match(raw.strip())
+            if probe is None:
+                lines.append(raw)
+                continue
+            probe_seen = True
+            size, approx, duration = (_probe_number(field) for field in probe.groups())
+            known_size = next((v for v in (size, approx) if v is not None), None)
+            known_duration = duration
+            for key, value in (("size", known_size), ("duration", known_duration)):
+                current = result["bound"][key]
+                if value is not None and (current is None or value > current):
+                    result["bound"][key] = value
+        output = "\n".join(lines)
 
         if returncode == 0:
             lines = output.split("\n")
@@ -478,6 +618,11 @@ class DownloaderWrapper:
             result["error"] = (
                 error_lines[-1] if error_lines else f"yt-dlp exited with code {returncode}"
             )[:200]
+
+        if probe_seen and not result.get("success") and returncode == 0:
+            # The probe printed, so a transfer was about to start, and no after_move
+            # filepath followed, so nothing came back. That is the --max-filesize abort.
+            result["transfer_refused"] = True
 
         return result
 

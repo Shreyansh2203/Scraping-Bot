@@ -1,6 +1,8 @@
-import asyncio
+﻿import asyncio
 import importlib.util
+import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -897,3 +899,416 @@ async def test_download_async_removes_the_job_directory_when_shutdown_cancels_it
             await wrapper.download_url("https://x.com/user/status/1", 1)
 
     assert list(tmp_path.iterdir()) == [], "a cancelled job left its directory behind"
+
+
+def test_build_command_bounds_the_transfer_before_a_byte_is_written():
+    """--max-filesize is the ceiling; the size floor in the handler only runs afterwards.
+
+    Without it, yt-dlp has no reason to stop: MAX_FILE_SIZE_MB was consulted once the
+    file was already on disk, so a multi-gigabyte stream filled the disk until
+    subprocess_timeout fired.
+    """
+    wrapper = DownloaderWrapper(output_dir=Path("downloads"), max_file_size_mb=50)
+    cmd = wrapper._build_command("https://instagram.com/reel/ABC123")
+
+    assert cmd[cmd.index("--max-filesize") + 1] == str(50 * 1024 * 1024)
+
+
+def test_build_command_asks_yt_dlp_to_report_the_size_and_duration_up_front():
+    """The bound is only actionable if the bot learns the extractor already knew the size.
+
+    yt-dlp's own "File is larger than max-filesize" line goes to stdout, which -q
+    silences, so without this probe the refusal is invisible and the request is retried
+    three times and then handed to the unbounded gallery-dl fallback.
+    """
+    wrapper = DownloaderWrapper(output_dir=Path("downloads"))
+    cmd = wrapper._build_command("https://instagram.com/reel/ABC123")
+
+    probe_templates = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--print"]
+    probe = [tpl for tpl in probe_templates if "scraping-bot-bound:" in tpl]
+    assert len(probe) == 1, probe_templates
+    assert probe[0].startswith(
+        "before_dl:"
+    ), "the probe has to be printed before the transfer starts"
+    assert "%(filesize)j" in probe[0] and "%(duration)j" in probe[0]
+
+
+def test_the_probe_pattern_matches_what_yt_dlp_actually_prints():
+    """yt-dlp eats the "before_dl:" print selector, so the tag has to be matched without it.
+
+    Captured from yt-dlp 2026.8.19 run against a local HTTP server with --max-filesize in
+    force: the only line it emitted was the tag and the three fields, the refusal itself
+    having gone to stdout where -q swallows it. A pattern that expected the selector would
+    match nothing and the oversize case would silently fall through to the retry loop.
+    """
+    wrapper = DownloaderWrapper(output_dir=Path("downloads"))
+
+    result = wrapper._parse_output("scraping-bot-bound:NA|NA|NA\n", 0)
+
+    assert result["bound"] == {"size": None, "duration": None}
+    assert result.get("transfer_refused") is True
+
+
+async def test_an_oversized_file_is_refused_without_a_retry_or_the_fallback(tmp_path):
+    """The oversize verdict is terminal, so it must not be retried or handed to gallery-dl."""
+    wrapper = DownloaderWrapper(output_dir=tmp_path, max_file_size_mb=1)
+
+    async def exec_oversized(*args, **kwargs):
+        proc = MagicMock()
+        proc.pid = 1
+        proc.returncode = 0
+        # What yt-dlp actually emits with -q: the probe line, and nothing else, because
+        # the downloader aborts before any after_move print happens.
+        proc.communicate = AsyncMock(return_value=(b"scraping-bot-bound:9000000|NA|NA\n", b""))
+        return proc
+
+    with (
+        patch("asyncio.create_subprocess_exec", side_effect=exec_oversized) as mock_exec,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        patch.object(wrapper, "_run_gallery_dl", new_callable=AsyncMock) as mock_gdl,
+    ):
+        res = await wrapper.download_url("https://x.com/user/status/1", 1)
+
+    assert res.success is False
+    assert "larger than the 1 MB limit" in res.error
+    assert mock_exec.await_count == 1, "an oversize link was retried"
+    mock_sleep.assert_not_awaited()
+    mock_gdl.assert_not_awaited()
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_media_longer_than_the_duration_limit_is_refused_without_the_fallback(tmp_path):
+    wrapper = DownloaderWrapper(output_dir=tmp_path, max_duration_seconds=90)
+
+    async def exec_too_long(*args, **kwargs):
+        proc = MagicMock()
+        proc.pid = 1
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"scraping-bot-bound:NA|NA|14400\n", b""))
+        return proc
+
+    with (
+        patch("asyncio.create_subprocess_exec", side_effect=exec_too_long) as mock_exec,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch.object(wrapper, "_run_gallery_dl", new_callable=AsyncMock) as mock_gdl,
+    ):
+        res = await wrapper.download_url("https://x.com/user/status/1", 1)
+
+    assert res.success is False
+    assert "longer than the 90s limit" in res.error
+    assert mock_exec.await_count == 1
+    mock_gdl.assert_not_awaited()
+
+
+async def test_a_transfer_the_extractor_refuses_to_make_is_terminal(tmp_path):
+    """The shape a --max-filesize abort actually has, reproduced from real yt-dlp.
+
+    The extractor reports no size in the format dict -- many do not -- so the only place
+    the size is known is the HTTP response, and the abort happens inside the downloader.
+    Verified against yt-dlp 2026.8.19 with the real flag set: exit 0, the probe line,
+    and nothing else, because the refusal is a stdout line that -q swallows. That is
+    the common case, so it is the one that must not be retried or handed to gallery-dl.
+    """
+    wrapper = DownloaderWrapper(output_dir=tmp_path, max_file_size_mb=1)
+
+    async def exec_aborted(*args, **kwargs):
+        proc = MagicMock()
+        proc.pid = 1
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"scraping-bot-bound:NA|NA|NA\n", b""))
+        return proc
+
+    with (
+        patch("asyncio.create_subprocess_exec", side_effect=exec_aborted) as mock_exec,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        patch.object(wrapper, "_run_gallery_dl", new_callable=AsyncMock) as mock_gdl,
+    ):
+        res = await wrapper.download_url("https://x.com/user/status/1", 1)
+
+    assert res.success is False
+    assert "--max-filesize" in res.error
+    assert mock_exec.await_count == 1, "a refused transfer was retried"
+    mock_sleep.assert_not_awaited()
+    mock_gdl.assert_not_awaited(), "an unbounded fallback was allowed to fetch the same file"
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_a_silent_failure_with_no_transfer_started_is_still_retried(tmp_path):
+    """The refusal is only terminal when a transfer actually began.
+
+    Without a probe line there is no evidence anything was started, so the existing
+    retry-then-gallery-dl behaviour has to stay: that is the path a flaky origin takes.
+    """
+    wrapper = DownloaderWrapper(output_dir=tmp_path, min_file_size=0)
+
+    with (
+        patch("asyncio.create_subprocess_exec") as mock_exec,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        proc = MagicMock()
+        proc.pid = 1
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_exec.return_value = proc
+
+        with patch.object(wrapper, "_run_gallery_dl", new_callable=AsyncMock) as mock_gdl:
+            mock_gdl.return_value = DownloadResult(success=False, error="gdl failed")
+            res = await wrapper.download_url("https://x.com/user/status/1", 1)
+
+    assert res.success is False
+    assert "max-filesize" not in (res.error or "")
+    assert mock_exec.await_count == 3
+    mock_gdl.assert_awaited_once()
+
+
+async def test_media_inside_both_bounds_is_downloaded_and_parsed_as_usual(tmp_path):
+    """The probe line must not disturb the positional parse of the after_move prints."""
+    wrapper = DownloaderWrapper(output_dir=tmp_path, min_file_size=10, max_duration_seconds=600)
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = MagicMock()
+        proc.pid = 1
+        proc.returncode = 0
+
+        async def side_effect(*args, **kwargs):
+            cwd = Path(kwargs["cwd"])
+            (cwd / "clip.mp4").write_bytes(b"x" * 2048)
+            proc.communicate = AsyncMock(
+                return_value=(
+                    b"scraping-bot-bound:2000000|NA|95\nclip.mp4\n2048\n1920x1080\n22\n",
+                    b"",
+                )
+            )
+            return proc
+
+        mock_exec.side_effect = side_effect
+
+        res = await wrapper.download_url("https://x.com/user/status/123", 12345)
+
+    assert res.success is True
+    assert res.file_path is not None and res.file_path.name == "clip.mp4"
+    assert res.size == 2048
+    assert res.resolution == "1920x1080"
+    res.cleanup()
+
+
+async def test_an_extractor_that_reports_no_size_is_left_to_the_byte_ceiling(tmp_path):
+    """NA everywhere must not be read as zero bytes and refuse every unknown stream."""
+    wrapper = DownloaderWrapper(output_dir=tmp_path, min_file_size=10)
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = MagicMock()
+        proc.pid = 1
+        proc.returncode = 0
+
+        async def side_effect(*args, **kwargs):
+            cwd = Path(kwargs["cwd"])
+            (cwd / "clip.mp4").write_bytes(b"x" * 2048)
+            proc.communicate = AsyncMock(
+                return_value=(
+                    b"scraping-bot-bound:NA|NA|NA\nclip.mp4\n2048\n1920x1080\n",
+                    b"",
+                )
+            )
+            return proc
+
+        mock_exec.side_effect = side_effect
+
+        res = await wrapper.download_url("https://x.com/user/status/123", 12345)
+
+    assert res.success is True
+    res.cleanup()
+
+
+def test_the_bound_probe_takes_the_worst_value_across_a_merged_download():
+    """A video+audio merge prints the probe once per format, so all of them are read."""
+    wrapper = DownloaderWrapper(output_dir=Path("downloads"), max_file_size_mb=1)
+
+    result = wrapper._parse_output(
+        "scraping-bot-bound:100|NA|30\n" "scraping-bot-bound:5000000|NA|30\n",
+        0,
+    )
+
+    assert result["bound"] == {"size": 5000000, "duration": 30}
+    assert wrapper._bound_refusal(result["bound"]) is not None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("NA|NA|NA", {"size": None, "duration": None}),
+        ("", {"size": None, "duration": None}),
+        ("2000000.0|NA|95.4", {"size": 2000000, "duration": 95}),
+        ("NA|4000000|NA", {"size": 4000000, "duration": None}),
+        ('"1GiB"|NA|NA', {"size": None, "duration": None}),
+    ],
+)
+def test_the_bound_probe_reads_the_shapes_yt_dlp_prints(raw, expected):
+    wrapper = DownloaderWrapper(output_dir=Path("downloads"))
+    result = wrapper._parse_output(f"scraping-bot-bound:{raw}", 0)
+    assert result["bound"] == expected
+
+
+def test_a_download_within_the_bounds_is_not_refused():
+    wrapper = DownloaderWrapper(output_dir=Path("downloads"), max_file_size_mb=50)
+    assert wrapper._bound_refusal({"size": 49 * 1024 * 1024, "duration": 599}) is None
+    assert wrapper._bound_refusal({"size": None, "duration": None}) is None
+    assert wrapper._bound_refusal("not a dict") is None
+    assert wrapper._bound_refusal(None) is None
+
+
+async def test_download_url_turns_a_saturated_bot_away_instead_of_queueing(tmp_path):
+    """A queued request has no timeout of its own, so two slow links park the bot.
+
+    Each request can spend up to three SUBPROCESS_TIMEOUTs on yt-dlp plus one on
+    gallery-dl; at the 300 s Render sets, one link holds a slot for twenty minutes and
+    two of them hold both. Queueing behind them means the third user waits with nothing
+    to bound the wait, so the answer comes back immediately instead.
+    """
+    wrapper = DownloaderWrapper(output_dir=tmp_path, concurrent=1)
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    async def exec_blocking(*args, **kwargs):
+        in_flight.set()
+        await release.wait()
+        proc = MagicMock()
+        proc.pid = 1
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"ERROR: nope"))
+        return proc
+
+    with patch("asyncio.create_subprocess_exec", side_effect=exec_blocking) as mock_exec:
+        first = asyncio.create_task(wrapper.download_url("https://x.com/user/status/1", 1))
+        await asyncio.wait_for(in_flight.wait(), timeout=5)
+
+        second = await asyncio.wait_for(
+            wrapper.download_url("https://x.com/user/status/2", 2), timeout=5
+        )
+        calls_while_saturated = mock_exec.await_count
+
+        release.set()
+        assert (await asyncio.wait_for(first, timeout=5)).success is False
+
+    assert second.success is False
+    assert "slots are busy" in second.error
+    assert calls_while_saturated == 1, "a saturated request was queued behind the first"
+
+
+async def test_a_request_is_admitted_as_soon_as_a_slot_frees_up(tmp_path):
+    """The counterpart: shedding is not a permanent closed door."""
+    wrapper = DownloaderWrapper(output_dir=tmp_path, concurrent=1)
+
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("asyncio.create_subprocess_exec") as mock_exec,
+    ):
+        proc = MagicMock()
+        proc.pid = 1
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"ERROR: nope"))
+        mock_exec.return_value = proc
+
+        first = await wrapper.download_url("https://x.com/user/status/1", 1)
+        second = await wrapper.download_url("https://x.com/user/status/2", 2)
+
+    assert first.success is False and "slots are busy" not in (first.error or "")
+    assert second.success is False and "slots are busy" not in (second.error or "")
+    # Three yt-dlp attempts plus one gallery-dl fallback, twice over.
+    assert mock_exec.await_count == 8, "the second request did not reach the extractor"
+
+
+async def test_cancellation_kills_the_extractor_tree_before_removing_the_job_dir(tmp_path):
+    """Order is the whole fix: kill first, then delete.
+
+    CancelledError is a BaseException, so no `except Exception` runs when the loop
+    cancels a task, and nothing removed the directory or killed the child. The orphaned
+    yt-dlp keeps writing, and on Windows its open handle is what stops rmtree from
+    deleting the partial file.
+    """
+    wrapper = DownloaderWrapper(output_dir=tmp_path)
+    order = []
+    job_dirs = []
+    real_rmtree = shutil.rmtree
+
+    async def exec_hanging(*args, **kwargs):
+        job_dir = Path(kwargs["cwd"])
+        job_dirs.append(job_dir)
+        (job_dir / "partial.mp4").write_bytes(b"x" * 4096)
+        proc = MagicMock()
+        proc.pid = 4242
+        proc.returncode = None
+        proc.communicate = AsyncMock(side_effect=asyncio.CancelledError())
+        return proc
+
+    def record_rmtree(path, **kwargs):
+        order.append("rmtree")
+        real_rmtree(path, **kwargs)
+
+    with (
+        patch("asyncio.create_subprocess_exec", side_effect=exec_hanging),
+        patch(
+            "core.downloader_wrapper._terminate_tree",
+            new_callable=AsyncMock,
+            side_effect=lambda proc: order.append("kill"),
+        ) as mock_term,
+        patch("core.downloader_wrapper.shutil.rmtree", side_effect=record_rmtree),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await wrapper.download_url("https://x.com/user/status/1", 1)
+
+    assert order == ["kill", "rmtree"], "the extractor outlived the directory it was writing to"
+    mock_term.assert_awaited_once()
+    assert not job_dirs[0].exists(), "the partial file survived the cancelled job"
+
+
+async def test_an_extractor_that_will_not_die_still_leaves_no_directory_behind(tmp_path, caplog):
+    """A kill that fails must not take the cleanup with it, and must be visible."""
+    wrapper = DownloaderWrapper(output_dir=tmp_path)
+    job_dirs = []
+
+    async def exec_hanging(*args, **kwargs):
+        job_dir = Path(kwargs["cwd"])
+        job_dirs.append(job_dir)
+        (job_dir / "partial.mp4").write_bytes(b"x" * 4096)
+        proc = MagicMock()
+        proc.pid = 4242
+        proc.returncode = None
+        proc.communicate = AsyncMock(side_effect=asyncio.CancelledError())
+        return proc
+
+    with (
+        patch("asyncio.create_subprocess_exec", side_effect=exec_hanging),
+        patch(
+            "core.downloader_wrapper._terminate_tree",
+            new_callable=AsyncMock,
+            side_effect=OSError("taskkill is not on PATH"),
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await wrapper.download_url("https://x.com/user/status/1", 1)
+
+    assert "Could not terminate the extractor process tree" in caplog.text
+    assert not job_dirs[0].exists(), "an undeletable kill also stranded the job directory"
+
+
+async def test_a_finished_extractor_is_not_killed_again_by_the_cleanup(tmp_path):
+    """The finally must not re-kill a child that already exited and was reaped."""
+    wrapper = DownloaderWrapper(output_dir=tmp_path)
+
+    with (
+        patch("asyncio.create_subprocess_exec") as mock_exec,
+        patch("core.downloader_wrapper._terminate_tree", new_callable=AsyncMock) as mock_term,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        proc = MagicMock()
+        proc.pid = 7
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"ERROR: nope"))
+        mock_exec.return_value = proc
+
+        res = await wrapper.download_url("https://x.com/user/status/1", 1)
+
+    assert res.success is False
+    mock_term.assert_not_awaited()

@@ -49,7 +49,12 @@ Keep `CONCURRENT_DOWNLOADS` low (default `2`), keep `SUBPROCESS_TIMEOUT` and
 link. The bot throttles each user to roughly one request per second and bounds concurrency
 globally, but neither of those is a licence to hammer an origin. Note that
 `SUBPROCESS_TIMEOUT` bounds a single attempt rather than a request: the worst case for one
-link is about four times that value, so a slot can be held for many minutes.
+link is about four times that value, so a slot can be held for many minutes. Rather than
+queue behind that — a wait with no timeout of its own — a request that arrives when every
+slot is taken is told so immediately and can be retried, so two slow links cannot park the
+bot for everyone else. Media over `MAX_FILE_SIZE_MB` or `MAX_DURATION_SECONDS` is refused
+before it is fetched: yt-dlp is given `--max-filesize` as a hard ceiling on the transfer,
+and the size and duration the extractor already knows decide the rest.
 
 ## Table of contents
 
@@ -192,14 +197,14 @@ Configure the application via environment variables or a `.env` file:
 |---|---|---|
 | `BOT_TOKEN` | *required* | Telegram Bot API token from @BotFather |
 | `DOWNLOAD_DIR` | `./downloads` | Directory to store temporary job directories |
-| `CONCURRENT_DOWNLOADS` | `2` | Maximum concurrent downloads allowed |
+| `CONCURRENT_DOWNLOADS` | `2` | Maximum concurrent downloads. A request that arrives when every slot is taken is refused immediately rather than queued, because one request can occupy a slot for up to four times `SUBPROCESS_TIMEOUT` |
 | `MAX_FILE_SIZE_MB` | `50` | Maximum size in MB for a single file. Anything above this is rejected **before** the bytes are written, as yt-dlp's `--max-filesize`, and the finished file is still re-checked after the download. Telegram's own limit is type-dependent — 10 MB for a photo, 50 MB for a video, audio and document — and this one flat cap is applied to every media type, so a photo between 10 MB and this value passes here and is refused by Telegram |
 | `MAX_DURATION_SECONDS` | `600` | Refuse media longer than this many seconds. Read from the metadata yt-dlp reports before it starts downloading, so a multi-hour stream is rejected in seconds rather than filling the disk. A Reel is 90 s and an X video 140 s, so the default is generous |
 | `ALLOWED_USERS` | *unset* | Comma-separated list of Telegram user IDs, e.g. `123456789,987654321`. This is the bot's only access control, so an unset, empty, or partly non-numeric value **stops the bot at startup** rather than quietly leaving it open — see [Scope and responsible use](#scope-and-responsible-use) |
 | `ALLOW_PUBLIC` | *unset* | Set to `1` to run a deliberately public bot. It exists so that the safe direction is the one that needs no action: without it, a bot with no allow-list refuses to start |
 | `PORT`, then `HEALTH_PORT` | `8080` | Port for the aiohttp health & metrics server. `PORT` is checked first and takes precedence, which is what Render's injected value relies on |
 | `HEALTH_BIND` | `127.0.0.1` | Network interface to bind the health server (`0.0.0.0` in Docker) |
-| `SUBPROCESS_TIMEOUT` | `180` | Timeout in seconds for **one extraction attempt**. A request makes up to three `yt-dlp` attempts plus one `gallery-dl` attempt, so the worst case for a single link is roughly four times this, not this |
+| `SUBPROCESS_TIMEOUT` | `180` | Timeout in seconds for **one extraction attempt**, which also bounds the process tree (`ffmpeg` included). A request makes up to three `yt-dlp` attempts plus one `gallery-dl` attempt, so the worst case for a single link is roughly four times this — which is why a saturated bot sheds load instead of queueing it |
 | `FFPROBE_TIMEOUT` | `10` | Timeout in seconds for ffprobe metadata probing |
 | `BOT_MODE` | *empty* | Set to `polling` to force long polling and ignore `WEBHOOK_URL`; useful for local development or hosts without a public URL |
 | `WEBHOOK_URL` | *derived* | Overrides the webhook endpoint. Defaults to `https://$RENDER_EXTERNAL_HOSTNAME/webhook` when that is set, otherwise empty (long polling) |
