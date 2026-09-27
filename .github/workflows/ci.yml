@@ -57,7 +57,17 @@ jobs:
         run: mypy bot core
 
       - name: Run tests (Pytest)
-        run: pytest
+        run: |
+          set +e
+          pytest -q --tb=line -rf > /tmp/pytest.log 2>&1
+          code=$?
+          # Surface each failure as a job annotation. A bare "exit code 1" is not
+          # diagnosable from the run summary, and the raw log needs authentication.
+          grep -E '^(FAILED|ERROR)' /tmp/pytest.log | while read -r line; do
+            echo "::error title=pytest::${line}"
+          done
+          tail -40 /tmp/pytest.log
+          exit $code
 
   dependency-audit:
     name: pip-audit
