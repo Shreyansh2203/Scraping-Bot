@@ -175,7 +175,7 @@ def _dispatcher_like_main() -> Dispatcher:
     """
     commands.router._parent_router = None
     download.router._parent_router = None
-    return _build_dispatcher(MagicMock(spec=DownloaderWrapper))
+    return _build_dispatcher(MagicMock(spec=DownloaderWrapper), "test-only-webhook-secret")
 
 
 async def _feed(texts_and_users, same_dispatcher: bool = False) -> list[list[str]]:

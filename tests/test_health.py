@@ -147,9 +147,11 @@ async def test_on_startup_webhook(monkeypatch):
     bot = MagicMock(spec=Bot)
     bot.set_webhook = AsyncMock()
 
-    await on_startup(bot)
+    await on_startup(bot, secret_token="per-process-secret")
     bot.set_webhook.assert_called_once_with(
-        "https://example.com/webhook", drop_pending_updates=False
+        "https://example.com/webhook",
+        secret_token="per-process-secret",
+        drop_pending_updates=False,
     )
 
 
@@ -158,7 +160,7 @@ async def test_on_startup_polling(monkeypatch):
     bot = MagicMock(spec=Bot)
     bot.delete_webhook = AsyncMock()
 
-    await on_startup(bot)
+    await on_startup(bot, secret_token="per-process-secret")
     bot.delete_webhook.assert_called_once_with(drop_pending_updates=False)
 
 

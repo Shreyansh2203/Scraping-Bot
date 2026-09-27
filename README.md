@@ -207,10 +207,18 @@ The application exposes two HTTP endpoints on the configured health port (defaul
 - **`GET /health`**: Returns JSON status, uptime, concurrency limit, and active download count.
 - **`GET /metrics`**: Prometheus-formatted metrics:
   ```text
-  scraping_bot_uptime_seconds 3600.00
+  scraping_bot_uptime_seconds 3600.0
   scraping_bot_active_downloads 1
   scraping_bot_concurrent_limit 2
   ```
+
+`POST /webhook` is the third route, and it is not a public API. Telegram echoes the
+secret the bot registered with `set_webhook` in the `X-Telegram-Bot-Api-Secret-Token`
+header of every delivery, and the bot refuses any request without it. The secret is
+generated at process start from the OS CSPRNG and lives only in memory: there is nothing
+to configure, nothing to rotate and nothing to commit, and a request that does not come
+from Telegram never reaches the dispatcher. Restarting the bot mints a new one and
+re-registers it with Telegram during startup.
 
 ---
 

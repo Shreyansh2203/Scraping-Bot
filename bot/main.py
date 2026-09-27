@@ -4,12 +4,14 @@ import asyncio
 import importlib.metadata
 import json
 import logging
+import secrets
 import signal
 import sys
 import time
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from types import FrameType
 from typing import Any
@@ -85,10 +87,32 @@ async def metrics_handler(request: web.Request) -> web.Response:
     return web.Response(text="\n".join(lines) + "\n", content_type="text/plain; version=0.0.4")
 
 
-async def on_startup(bot: Bot) -> None:
+def _generate_webhook_secret() -> str:
+    """Mint the secret this process will require on every webhook delivery.
+
+    Telegram echoes the value handed to ``set_webhook`` in the
+    ``X-Telegram-Bot-Api-Secret-Token`` header of every update it posts, and aiogram's
+    ``SimpleRequestHandler.verify_secret`` returns True unconditionally when it was
+    constructed without a ``secret_token``. A webhook set up that way accepts a hand
+    written ``POST /webhook`` from anyone, and the update that follows is dispatched
+    through the same middlewares as a real one, so the allow-list sees an id the
+    caller chose rather than Telegram's.
+
+    The secret is generated per process start instead of read from the environment:
+    nothing durable has to be stored, rotated or leaked, and a stale value left in an
+    image or a committed ``.env`` cannot outlive the process. It is never logged.
+    ``secrets`` is the CSPRNG, and ``token_urlsafe`` stays inside the alphabet Telegram
+    accepts for the header.
+    """
+    return secrets.token_urlsafe(32)
+
+
+async def on_startup(bot: Bot, secret_token: str) -> None:
     if settings.WEBHOOK_URL:
         logging.getLogger("bot.main").info("Setting webhook to %s", settings.WEBHOOK_URL)
-        await bot.set_webhook(settings.WEBHOOK_URL, drop_pending_updates=False)
+        await bot.set_webhook(
+            settings.WEBHOOK_URL, secret_token=secret_token, drop_pending_updates=False
+        )
     else:
         logging.getLogger("bot.main").info("Deleting webhook for polling")
         await bot.delete_webhook(drop_pending_updates=False)
@@ -163,17 +187,19 @@ def _install_signal_handlers(
             logger.warning("Could not install %s handler: %s", sig.name, exc)
 
 
-def _build_dispatcher(downloader: DownloaderWrapper) -> Dispatcher:
+def _build_dispatcher(downloader: DownloaderWrapper, webhook_secret: str) -> Dispatcher:
     """Assemble the dispatcher the bot serves updates with.
 
     Extracted so the middleware order is something a test can assert on rather than
     an accident of ``main``'s body: ``AuthMiddleware`` and ``ThrottleMiddleware`` are
     the only access control and the only rate limit the bot has, and neither does
-    anything if it is not registered here.
+    anything if it is not registered here. ``webhook_secret`` is bound into the startup
+    hook because the middleware chain trusts whatever the webhook admits, which is only
+    Telegram once the request handler has checked the secret header.
     """
     dp = Dispatcher()
     dp["downloader"] = downloader
-    dp.startup.register(on_startup)
+    dp.startup.register(partial(on_startup, secret_token=webhook_secret))
     dp.include_router(commands.router)
     dp.include_router(download.router)
 
@@ -208,7 +234,8 @@ async def main() -> None:
         ffprobe_timeout=settings.FFPROBE_TIMEOUT,
     )
 
-    dp = _build_dispatcher(downloader)
+    webhook_secret = _generate_webhook_secret()
+    dp = _build_dispatcher(downloader, webhook_secret)
 
     app = web.Application()
     app[DOWNLOADER_KEY] = downloader
@@ -220,6 +247,7 @@ async def main() -> None:
         webhook_requests_handler = SimpleRequestHandler(
             dispatcher=dp,
             bot=bot,
+            secret_token=webhook_secret,
         )
         webhook_requests_handler.register(app, path="/webhook")
         setup_application(app, dp, bot=bot)

@@ -1,15 +1,20 @@
 import asyncio
+import json
 import logging
+import re
 import signal
 from collections.abc import Callable
 from functools import partial
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 from aiohttp import web
 
+import bot.main
 from bot.handlers import commands, download
 from bot.main import (
+    _generate_webhook_secret,
     _install_signal_handlers,
     _make_shutdown_handler,
     _raise_system_exit,
@@ -76,6 +81,152 @@ async def test_main_webhook_flow(monkeypatch):
         await main()
 
         mock_bot.session.close.assert_called_once()
+
+
+SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
+
+
+class _WebhookRequest:
+    """The slice of aiohttp's Request that SimpleRequestHandler.handle reads.
+
+    Built by hand rather than driven through a live server so the test can hand the
+    handler a header of its choosing, which is the entire point: the request has to be
+    able to arrive from something that is not Telegram.
+    """
+
+    def __init__(self, secret_token, payload=None):
+        self.headers = {} if secret_token is None else {SECRET_HEADER: secret_token}
+        self._payload = {"update_id": 1} if payload is None else payload
+
+    async def json(self, loads=None):
+        return self._payload
+
+
+async def _run_webhook_main(monkeypatch, secret):
+    """Run main() in webhook mode and hand back what it actually wired up.
+
+    Returns the real SimpleRequestHandler it constructed rather than a mock of one: the
+    secret check under test lives inside aiogram, so a stand-in would pass whatever the
+    test asserted about it.
+    """
+    monkeypatch.setattr(settings, "WEBHOOK_URL", "https://example.com/webhook")
+    monkeypatch.setattr(bot.main, "_generate_webhook_secret", lambda: secret)
+
+    handlers = []
+    dispatchers = []
+    real_handler_cls = SimpleRequestHandler
+
+    def recording_handler(**kwargs):
+        dispatchers.append(kwargs["dispatcher"])
+        handler = real_handler_cls(**kwargs)
+        handlers.append(handler)
+        return handler
+
+    tg_bot = MagicMock()
+    tg_bot.session.close = AsyncMock()
+    tg_bot.set_webhook = AsyncMock()
+    tg_bot.delete_webhook = AsyncMock()
+    tg_bot.session.json_loads = json.loads
+    tg_bot.session.json_dumps = json.dumps
+
+    site = MagicMock()
+    site.start = AsyncMock()
+
+    monkeypatch.setattr(bot.main, "SimpleRequestHandler", recording_handler)
+    monkeypatch.setattr(bot.main, "Bot", MagicMock(return_value=tg_bot))
+    monkeypatch.setattr(bot.main, "setup_application", MagicMock())
+    monkeypatch.setattr(web, "TCPSite", MagicMock(return_value=site))
+    monkeypatch.setattr(web.AppRunner, "setup", AsyncMock())
+    monkeypatch.setattr(web.AppRunner, "cleanup", AsyncMock())
+
+    with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
+        await main()
+
+    assert len(handlers) == 1, "main() built more or fewer than one webhook request handler"
+    return handlers[0], tg_bot, dispatchers[0]
+
+
+async def test_webhook_secret_is_shared_by_set_webhook_and_the_request_handler(monkeypatch):
+    """Both ends of the exchange must be given the same value or the bot rejects itself.
+
+    set_webhook registers the secret with Telegram; the request handler is what checks
+    the header on the way back in. Two independently generated values -- or one call
+    site that quietly drops the argument -- means every legitimate delivery is refused.
+    """
+    handler, tg_bot, dp = await _run_webhook_main(monkeypatch, "the-one-secret")
+
+    assert handler.secret_token == "the-one-secret"
+
+    await dp.startup.trigger(bot=tg_bot)
+
+    tg_bot.set_webhook.assert_awaited_once()
+    assert tg_bot.set_webhook.await_args.kwargs["secret_token"] == "the-one-secret"
+
+
+async def test_webhook_rejects_an_update_carrying_the_wrong_secret(monkeypatch):
+    """A hand-written POST must not reach the dispatcher.
+
+    AuthMiddleware reads the sender id off the update, so an update the attacker
+    composed carries an attacker-chosen id: a permissive webhook is a public
+    subprocess spawner, not merely a spam surface.
+    """
+    handler, _, _ = await _run_webhook_main(monkeypatch, "the-one-secret")
+    feed = AsyncMock()
+    monkeypatch.setattr(handler.dispatcher, "feed_raw_update", feed)
+
+    response = await handler.handle(_WebhookRequest("not-the-secret"))
+
+    assert response.status == 401, "a webhook update with a wrong secret was not refused"
+    feed.assert_not_awaited()
+
+
+async def test_webhook_rejects_an_update_carrying_no_secret_at_all(monkeypatch):
+    """A missing header must be refused, not treated as an empty secret to match."""
+    handler, _, _ = await _run_webhook_main(monkeypatch, "the-one-secret")
+    feed = AsyncMock()
+    monkeypatch.setattr(handler.dispatcher, "feed_raw_update", feed)
+
+    response = await handler.handle(_WebhookRequest(None))
+
+    assert response.status == 401
+    feed.assert_not_awaited()
+
+
+async def test_webhook_accepts_an_update_carrying_the_right_secret(monkeypatch):
+    """The counterpart to the rejection: the fix must not be 'refuse everything'."""
+    handler, _, _ = await _run_webhook_main(monkeypatch, "the-one-secret")
+    feed = AsyncMock()
+    monkeypatch.setattr(handler.dispatcher, "feed_raw_update", feed)
+
+    response = await handler.handle(_WebhookRequest("the-one-secret"))
+    await asyncio.sleep(0)
+
+    assert response.status == 200
+    feed.assert_awaited_once()
+    assert feed.await_args.kwargs["update"] == {"update_id": 1}
+
+
+def test_generated_webhook_secret_is_fresh_each_time_and_url_safe():
+    first = _generate_webhook_secret()
+    second = _generate_webhook_secret()
+
+    assert first != second, "the secret is not random per process start"
+    # Telegram allows 1-256 characters from A-Z a-z 0-9 _ - for this header.
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,256}", first), f"unusable secret: {first!r}"
+
+
+async def test_webhook_secret_is_never_logged(monkeypatch, caplog):
+    """A secret in the log is a secret in whatever aggregates the log."""
+    marker = "SENTINEL-SECRET-MUST-NOT-LEAK"
+    handler, tg_bot, dp = await _run_webhook_main(monkeypatch, marker)
+    monkeypatch.setattr(handler.dispatcher, "feed_raw_update", AsyncMock())
+
+    with caplog.at_level(logging.DEBUG):
+        await dp.startup.trigger(bot=tg_bot)
+        await handler.handle(_WebhookRequest(marker))
+
+    assert marker in handler.secret_token, "the sentinel never reached the handler"
+    assert marker not in caplog.text, "the webhook secret reached a log record"
 
 
 async def test_shutdown_drains_tasks_and_releases_resources():

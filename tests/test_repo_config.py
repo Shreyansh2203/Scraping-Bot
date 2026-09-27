@@ -120,6 +120,25 @@ def test_allow_list_is_prompted_for_and_never_hardcoded() -> None:
     ), "ALLOWED_USERS must not carry a value in render.yaml"
 
 
+def test_the_webhook_secret_is_never_configured_or_committed() -> None:
+    """The webhook secret is minted per process start, so no file may supply one.
+
+    A secret in the blueprint, in `.env.example` or in an env lookup would outlive the
+    process that generated it: it would be in git history, in the image, and identical
+    across every deployment. That is the opposite of a per-boot secret.
+    """
+    for name in ("render.yaml", ".env.example", "Dockerfile", "README.md"):
+        text = _read(name)
+        for key in ("WEBHOOK_SECRET", "SECRET_TOKEN"):
+            assert (
+                key not in text
+            ), f"{name} declares {key}; the webhook secret is generated at boot"
+
+    env_reads = re.findall(r"""os\.getenv\(\s*["']([A-Z0-9_]+)["']""", _read("core/config.py"))
+    secret_reads = [name for name in env_reads if "SECRET" in name]
+    assert not secret_reads, f"core/config.py reads {secret_reads} from the environment"
+
+
 def test_bot_token_is_prompted_for_and_never_hardcoded() -> None:
     render = _read("render.yaml")
     block = render.split("- key: BOT_TOKEN", 1)[1].split("- key:", 1)[0]
