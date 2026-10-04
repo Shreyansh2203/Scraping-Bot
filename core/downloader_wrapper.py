@@ -262,7 +262,10 @@ class DownloaderWrapper:
                     returncode = proc.returncode or 0
 
                 except transient_errors as exc:
-                    last_error = str(exc)
+                    # A bare TimeoutError has an empty str(), which left the user
+                    # looking at "Transient error after 4 attempts: " with nothing
+                    # after the colon. The exception name says what happened.
+                    last_error = str(exc) or type(exc).__name__
                     if attempt < max_retries:
                         await asyncio.sleep(retry_delay * (2**attempt))
                         continue
@@ -364,6 +367,13 @@ class DownloaderWrapper:
             "gallery_dl",
             "--directory",
             str(target_dir),
+            # The same byte ceiling the yt-dlp path gets from --max-filesize. Without
+            # it, a link that fails yt-dlp three times and then resolves to a large
+            # gallery-dl target writes to disk until subprocess_timeout fires, and the
+            # size floor in bot/handlers/download.py only runs once the bytes are
+            # already there. gallery-dl reads a plain byte count here, like yt-dlp.
+            "--filesize-max",
+            str(self.max_file_size_bytes),
             "-q",
             url,
         ]

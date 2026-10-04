@@ -292,6 +292,30 @@ async def test_process_download_always_removes_the_job_directory(mock_message, t
     assert not job_dir.exists(), "the job directory outlived the delivery"
 
 
+async def test_process_download_does_not_publish_the_exception_text(mock_message):
+    """str(exc) reaches the chat only if it is escaped, and escaping is not the point.
+
+    An exception raised anywhere in the pipeline can carry the container's absolute
+    job path or a fragment of the extractor's stderr. The log line keeps the detail;
+    the chat gets the outcome.
+    """
+    status_msg = MagicMock(spec=Message)
+    status_msg.edit_text = AsyncMock()
+    mock_message.reply.return_value = status_msg
+
+    downloader = MagicMock(spec=DownloaderWrapper)
+    downloader.download_url = AsyncMock(
+        side_effect=RuntimeError("/app/downloads/job_abc123 vanished: yt-dlp stderr fragment")
+    )
+
+    await _process_download(mock_message, downloader, "https://x.com/user/status/123", 12345)
+
+    text = status_msg.edit_text.call_args[0][0]
+    assert "/app/downloads/job_abc123" not in text
+    assert "yt-dlp stderr fragment" not in text
+    assert "logged" in text
+
+
 async def test_process_download_escapes_html_in_error_caption(mock_message):
     status_msg = MagicMock(spec=Message)
     status_msg.edit_text = AsyncMock()
@@ -309,7 +333,14 @@ async def test_process_download_escapes_html_in_error_caption(mock_message):
     assert "unavailable &amp; private" in text
 
 
-async def test_process_download_escapes_html_in_exception_caption(mock_message):
+async def test_process_download_never_renders_html_from_an_exception(mock_message):
+    """The stronger form of the escaping rule: the text is not published at all.
+
+    This used to assert that an exception's markup arrives escaped. Nothing renders
+    str(exc) now, so markup in an exception cannot reach the chat in any form, and
+    the extractor-supplied text that *is* rendered (result.error) keeps its own
+    escaping test below.
+    """
     status_msg = MagicMock(spec=Message)
     status_msg.edit_text = AsyncMock()
     mock_message.reply.return_value = status_msg
@@ -321,7 +352,8 @@ async def test_process_download_escapes_html_in_exception_caption(mock_message):
 
     text = status_msg.edit_text.call_args[0][0]
     assert "<tg-send>" not in text
-    assert "&lt;tg-send&gt;" in text
+    assert "&lt;tg-send&gt;" not in text
+    assert "bad request" not in text
 
 
 async def test_process_download_escapes_html_in_url_caption(mock_message, tmp_path):
@@ -424,6 +456,8 @@ async def test_process_download_failure(mock_message):
 
 
 async def test_process_download_exception(mock_message):
+    # The reason belongs in the log, not in the chat: str(exc) can carry absolute
+    # container paths or a fragment of the extractor's stderr.
     status_msg = MagicMock(spec=Message)
     status_msg.edit_text = AsyncMock()
     mock_message.reply.return_value = status_msg
@@ -433,7 +467,10 @@ async def test_process_download_exception(mock_message):
 
     await _process_download(mock_message, downloader, "https://x.com/user/status/123", 12345)
 
-    status_msg.edit_text.assert_called_once_with("❌ Error: Subprocess crashed")
+    status_msg.edit_text.assert_called_once()
+    text = status_msg.edit_text.call_args[0][0]
+    assert "Subprocess crashed" not in text
+    assert "logged" in text
 
 
 async def test_process_download_missing_files_on_disk(mock_message, tmp_path):

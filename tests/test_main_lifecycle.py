@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import logging.handlers
 import re
 import signal
 from collections.abc import Callable
@@ -368,3 +369,39 @@ async def test_termination_signal_cancels_main_task_and_drains(monkeypatch):
     downloader.shutdown.assert_called_once()
     cleanup.assert_awaited_once()
     bot.session.close.assert_awaited_once()
+
+
+def test_the_log_file_is_rotated_rather_than_appended_to_forever(tmp_path, monkeypatch):
+    """bot.log sits in the container's writable layer, so it has to have a ceiling.
+
+    A plain FileHandler grows for the lifetime of the process; the platform collects
+    everything from stdout regardless, so the file only has to survive a restart.
+    The handler is driven directly rather than through the root logger, because
+    pytest installs its own root handler and logging.basicConfig then declines to
+    add ours.
+    """
+    monkeypatch.setattr(bot.main, "LOG_FILE_MAX_BYTES", 2048)
+    log_path = tmp_path / "bot.log"
+
+    handlers = bot.main._configure_logging(log_path)
+    try:
+        rotating = [
+            handler
+            for handler in handlers
+            if isinstance(handler, logging.handlers.RotatingFileHandler)
+        ]
+        assert len(rotating) == 1, "the file handler must be the rotating one"
+        assert rotating[0].maxBytes == 2048
+        assert rotating[0].backupCount == bot.main.LOG_FILE_BACKUP_COUNT
+
+        # And it actually rotates, rather than merely being configured to. Two writes:
+        # shouldRollover() never rolls over an empty file (gh-116263), so the first
+        # record only makes the file non-empty.
+        first = logging.LogRecord("probe", logging.INFO, "probe", 1, "start", None, None)
+        rotating[0].handle(first)
+        big = logging.LogRecord("probe", logging.ERROR, "probe", 1, "x" * 4096, None, None)
+        rotating[0].handle(big)
+        assert any(p.name.startswith("bot.log.") for p in tmp_path.iterdir())
+    finally:
+        for handler in handlers:
+            handler.close()

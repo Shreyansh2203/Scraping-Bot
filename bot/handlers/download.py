@@ -166,10 +166,16 @@ async def _process_download(
                 detail = html.escape(result.error or "Unknown error")
                 await status_msg.edit_text(f"❌ Failed: {detail}")
 
-    except Exception as exc:
+    except Exception:
+        # The exception text is for the log, not for the chat: str(exc) can carry the
+        # container's absolute job paths or a fragment of the extractor's stderr, and a
+        # chat is not a place to publish those. The user gets the outcome; the reason
+        # is in the log line above, with the same correlation.
         logger.exception("Download failed for %s", url)
         if status_msg:
-            await status_msg.edit_text(f"❌ Error: {html.escape(str(exc))}")
+            await status_msg.edit_text(
+                "❌ Something went wrong handling that link. The failure has been logged."
+            )
     finally:
         if result:
             result.cleanup()

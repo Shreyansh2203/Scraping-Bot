@@ -275,6 +275,57 @@ async def test_run_gallery_dl_timeout_terminates_tree(tmp_path):
     proc.kill.assert_not_called()
 
 
+async def test_gallery_dl_command_is_bounded_by_the_same_ceiling_as_yt_dlp(tmp_path):
+    """The fallback is the unbounded path, which is how a big target gets through.
+
+    --max-filesize stops yt-dlp mid-transfer, but nothing stopped gallery-dl: a link
+    that fails yt-dlp three times and then resolved to a large gallery target wrote
+    to disk until SUBPROCESS_TIMEOUT fired, because the size check in
+    bot/handlers/download.py only runs once the bytes are already there.
+    """
+    wrapper = DownloaderWrapper(output_dir=tmp_path, max_file_size_mb=50, min_file_size=0)
+    job_dir = tmp_path / "job_test"
+    job_dir.mkdir()
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        mock_exec.side_effect = _gallery_dl_stub({"instagram/image.jpg": b"image data"})
+
+        res = await wrapper._run_gallery_dl("https://instagram.com/p/ABC", job_dir)
+
+    assert res.success is True
+    cmd = list(mock_exec.call_args.args)
+    assert cmd[cmd.index("--filesize-max") + 1] == str(50 * 1024 * 1024)
+
+
+async def test_a_timeout_that_exhausts_its_retries_says_so(tmp_path):
+    """The reason the user is shown must not be a blank.
+
+    TimeoutError has an empty str(), so str(exc) produced "" and the message ended
+    at the colon: "Transient error after 4 attempts: ". The exception name is what
+    the user needs to see.
+    """
+    wrapper = DownloaderWrapper(output_dir=tmp_path, subprocess_timeout=0.01)
+    job_dir = tmp_path / "job_test"
+    job_dir.mkdir()
+
+    with (
+        patch("asyncio.create_subprocess_exec") as mock_exec,
+        patch("core.downloader_wrapper._terminate_tree", new_callable=AsyncMock),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch.object(wrapper, "_run_gallery_dl", new_callable=AsyncMock) as mock_gdl,
+    ):
+        proc = MagicMock()
+        proc.communicate = AsyncMock(side_effect=TimeoutError)
+        mock_exec.return_value = proc
+
+        res = await wrapper.download_url("https://x.com/user/status/1", 1)
+
+    assert res.success is False
+    assert res.error.endswith("TimeoutError"), res.error
+    assert not res.error.endswith(": "), "the reason is blank after the colon"
+    mock_gdl.assert_not_awaited()
+
+
 async def test_run_gallery_dl_no_supported_files(tmp_path):
     wrapper = DownloaderWrapper(output_dir=tmp_path)
     job_dir = tmp_path / "job_test"

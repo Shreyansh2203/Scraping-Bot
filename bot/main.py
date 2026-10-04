@@ -12,6 +12,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime, timezone
 from functools import partial
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import FrameType
 from typing import Any
@@ -37,6 +38,11 @@ def _resolve_version() -> str:
 
 __version__ = _resolve_version()
 _start_time = time.monotonic()
+
+# bot.log lives in the container's writable layer, so it is rotated rather than
+# appended to forever: 5 MB of current log plus two backups.
+LOG_FILE_MAX_BYTES = 5_000_000
+LOG_FILE_BACKUP_COUNT = 2
 
 DOWNLOADER_KEY: web.AppKey[DownloaderWrapper] = web.AppKey("downloader")
 
@@ -210,15 +216,33 @@ def _build_dispatcher(downloader: DownloaderWrapper, webhook_secret: str) -> Dis
     return dp
 
 
-async def main() -> None:
-    log_path = Path("bot.log").resolve()
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter())
-    file_handler = logging.FileHandler(log_path)
+def _configure_logging(log_path: Path) -> tuple[logging.Handler, ...]:
+    """Log to stdout for the platform, and to a rotated file for post-mortem reads.
+
+    The file lives in the container's writable layer, so a plain FileHandler would
+    grow it for as long as the process runs. Everything still reaches stdout, which
+    is what the platform collects; the file is only there to be read after a restart.
+    """
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(JsonFormatter())
+    file_handler = RotatingFileHandler(
+        log_path,
+        maxBytes=LOG_FILE_MAX_BYTES,
+        backupCount=LOG_FILE_BACKUP_COUNT,
+        encoding="utf-8",
+    )
     logging.basicConfig(
         level=logging.INFO,
-        handlers=[handler, file_handler],
+        handlers=[stream_handler, file_handler],
     )
+    # Returned so the shutdown path can close them; a RotatingFileHandler holds an
+    # open file descriptor for the life of the process.
+    return (stream_handler, file_handler)
+
+
+async def main() -> None:
+    log_path = Path("bot.log").resolve()
+    log_handlers = _configure_logging(log_path)
 
     settings.validate()
 
@@ -274,7 +298,7 @@ async def main() -> None:
         else:
             await dp.start_polling(bot)
     finally:
-        await _shutdown(downloader, runner, bot, (handler, file_handler))
+        await _shutdown(downloader, runner, bot, log_handlers)
 
 
 if __name__ == "__main__":
