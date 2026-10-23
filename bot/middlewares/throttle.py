@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Optional
 
 from aiogram import BaseMiddleware
 from aiogram.types import Message, TelegramObject
@@ -10,10 +10,25 @@ from core.config import settings
 
 
 class ThrottleMiddleware(BaseMiddleware):
-    def __init__(self, rate_limit: float = 1.0, max_size: int = 10000) -> None:
+    """Per-user rate limiting with an optional Redis backend for distributed deployments.
+
+    When ``REDIS_URL`` is set and the ``redis`` package is installed, Redis is the
+    authoritative store so multiple bot replicas share a single rate-limit namespace.
+    Otherwise the in-memory ``last_request`` dict is used, which is correct for a
+    single-replica deployment and keeps existing tests green.
+    """
+
+    def __init__(
+        self,
+        rate_limit: float = 1.0,
+        max_size: int = 10000,
+        redis_url: Optional[str] = None,
+    ) -> None:
         self.rate_limit = rate_limit
         self.max_size = max_size
         self.last_request: dict[int, float] = {}
+        self._redis_url = redis_url or settings.REDIS_URL
+        self._redis: Any = None
 
     def _cleanup(self, now: float) -> None:
         """Evict timestamps older than rate_limit window to prevent memory leaks."""
@@ -27,18 +42,54 @@ class ThrottleMiddleware(BaseMiddleware):
             for uid in oldest_keys:
                 del self.last_request[uid]
 
+    async def _get_redis(self) -> Any:
+        if self._redis is not None:
+            return self._redis
+        if not self._redis_url:
+            return None
+        try:
+            import redis.asyncio as redis  # type: ignore[import-not-found]
+
+            self._redis = redis.from_url(self._redis_url)
+            return self._redis
+        except ImportError:
+            return None
+
+    async def _is_throttled(self, user_id: int, now: float) -> bool:
+        redis_client = await self._get_redis()
+        if redis_client is not None:
+            key = f"scraping-bot:throttle:{user_id}"
+            try:
+                last = await redis_client.get(key)
+                if last is not None:
+                    try:
+                        last_ts = float(last)
+                        if now - last_ts < self.rate_limit:
+                            return True
+                    except ValueError:
+                        pass
+                await redis_client.setex(key, int(self.rate_limit) + 1, str(now))
+                return False
+            except Exception:
+                # Redis misbehaved: fall through to in-memory below.
+                self._redis = None
+
+        self._cleanup(now)
+        if user_id in self.last_request and now - self.last_request[user_id] < self.rate_limit:
+            return True
+        self.last_request[user_id] = now
+        return False
+
     async def __call__(self, handler: Any, event: TelegramObject, data: dict[str, Any]) -> Any:
         if not isinstance(event, Message):
             return await handler(event, data)
 
         user_id = event.from_user.id if event.from_user else 0
         now = time.monotonic()
-        self._cleanup(now)
 
-        if user_id in self.last_request and (now - self.last_request[user_id] < self.rate_limit):
+        if await self._is_throttled(user_id, now):
             await event.reply("⚠️ Slow down! Please wait a moment.")
             return
-        self.last_request[user_id] = now
         return await handler(event, data)
 
 

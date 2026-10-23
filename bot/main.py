@@ -93,6 +93,46 @@ async def metrics_handler(request: web.Request) -> web.Response:
     return web.Response(text="\n".join(lines) + "\n", content_type="text/plain; version=0.0.4")
 
 
+async def deep_health_handler(request: web.Request) -> web.Response:
+    """Deep health check: verifies extractors, ffprobe, and disk headroom.
+
+    Returns 200 when every dependency is available and disk usage is below the
+    configured ceiling, 503 otherwise.
+    """
+    import shutil
+
+    downloader = request.app[DOWNLOADER_KEY]
+    problems: list[str] = []
+
+    for binary in ("ffmpeg", "ffprobe", "yt_dlp", "gallery_dl"):
+        if binary in ("yt_dlp", "gallery_dl"):
+            import importlib.util
+
+            if importlib.util.find_spec(binary) is None:
+                problems.append(f"{binary} is not importable")
+        elif shutil.which(binary) is None:
+            problems.append(f"{binary} is not on PATH")
+
+    if downloader.max_disk_usage_percent > 0:
+        try:
+            total, used, _ = shutil.disk_usage(downloader.output_dir)
+            if total > 0 and used / total * 100 >= downloader.max_disk_usage_percent:
+                problems.append(
+                    f"disk usage at {used / total * 100:.0f}% exceeds the "
+                    f"{downloader.max_disk_usage_percent}% limit"
+                )
+        except OSError as exc:
+            problems.append(f"cannot probe disk usage: {exc}")
+
+    status = "ok" if not problems else "degraded"
+    body = {
+        "status": status,
+        "version": __version__,
+        "problems": problems,
+    }
+    return web.json_response(body, status=200 if not problems else 503)
+
+
 def _generate_webhook_secret() -> str:
     """Mint the secret this process will require on every webhook delivery.
 
@@ -212,7 +252,7 @@ def _build_dispatcher(downloader: DownloaderWrapper, webhook_secret: str) -> Dis
     # Register Auth before Throttle, so an unauthorised message is answered with
     # "Unauthorized" rather than "Slow down", and never reaches a handler.
     dp.message.middleware(throttle.AuthMiddleware())
-    dp.message.middleware(throttle.ThrottleMiddleware())
+    dp.message.middleware(throttle.ThrottleMiddleware(redis_url=settings.REDIS_URL))
     return dp
 
 
@@ -258,6 +298,7 @@ async def main() -> None:
         ffprobe_timeout=settings.FFPROBE_TIMEOUT,
         max_file_size_mb=settings.MAX_FILE_SIZE_MB,
         max_duration_seconds=settings.MAX_DURATION_SECONDS,
+        max_disk_usage_percent=settings.MAX_DISK_USAGE_PERCENT,
     )
 
     webhook_secret = _generate_webhook_secret()
@@ -267,6 +308,7 @@ async def main() -> None:
     app[DOWNLOADER_KEY] = downloader
     app.router.add_get("/health", health_handler)
     app.router.add_get("/metrics", metrics_handler)
+    app.router.add_get("/healthz", deep_health_handler)
 
     use_webhook = bool(settings.WEBHOOK_URL)
     if use_webhook:

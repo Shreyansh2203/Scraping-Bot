@@ -36,6 +36,15 @@ class Settings:
         self.SUBPROCESS_TIMEOUT: int = self._safe_int(os.getenv("SUBPROCESS_TIMEOUT", "180"), 180)
         self.FFPROBE_TIMEOUT: int = self._safe_int(os.getenv("FFPROBE_TIMEOUT", "10"), 10)
 
+        # Redis URL for distributed rate limiting across bot replicas. Unset = in-memory only.
+        self.REDIS_URL: str = os.getenv("REDIS_URL", "")
+
+        # Fraction of the download partition that may be used before new downloads
+        # are refused. 0 disables the guard.
+        self.MAX_DISK_USAGE_PERCENT: int = self._safe_int(
+            os.getenv("MAX_DISK_USAGE_PERCENT", "0"), 0
+        )
+
         self.BOT_MODE: str = os.getenv("BOT_MODE", "").lower()
         self.RENDER_EXTERNAL_HOSTNAME: str = os.getenv("RENDER_EXTERNAL_HOSTNAME", "")
         if self.BOT_MODE == "polling":
@@ -88,6 +97,8 @@ class Settings:
             raise RuntimeError("MAX_DURATION_SECONDS must be >= 1")
         if not (1 <= self.HEALTH_PORT <= 65535):
             raise RuntimeError("HEALTH_PORT must be between 1 and 65535")
+        if not (0 <= self.MAX_DISK_USAGE_PERCENT <= 100):
+            raise RuntimeError("MAX_DISK_USAGE_PERCENT must be between 0 and 100")
         if self._malformed_user_ids:
             offenders = ", ".join(repr(uid) for uid in self._malformed_user_ids)
             raise RuntimeError(

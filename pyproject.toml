@@ -68,11 +68,10 @@ testpaths = ["tests"]
 addopts = "-v --tb=short --cov=bot --cov=core --cov-report=term-missing"
 
 [tool.coverage.report]
-# The suite covers every statement in bot/ and core/ (100% as of the test additions
-# that closed the downloader's error and fallback branches). The floor sits a little
-# under that so adding a file does not immediately require a test for every line in
-# it, but it is high enough that any real regression fails the build.
-fail_under = 98
+# The README targets 100% coverage of bot/ and core/. The floor enforces that: any
+# uncovered line in the packaged modules fails the build, so regressions cannot slip
+# in unnoticed. Adding a new module still requires tests for its reachable statements.
+fail_under = 100
 show_missing = true
 exclude_lines = [
     "pragma: no cover",

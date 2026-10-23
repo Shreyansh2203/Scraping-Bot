@@ -258,3 +258,23 @@ def test_health_port_validation(monkeypatch, name, value):
 
     with pytest.raises(RuntimeError, match="HEALTH_PORT must be between 1 and 65535"):
         Settings().validate()
+
+
+@pytest.mark.parametrize("value", ["-1", "101"])
+def test_max_disk_usage_percent_validation(monkeypatch, value):
+    monkeypatch.setenv("BOT_TOKEN", "123:ABC")
+    monkeypatch.delenv("ALLOWED_USERS", raising=False)
+    monkeypatch.setenv("ALLOW_PUBLIC", "1")
+    monkeypatch.setenv("MAX_DISK_USAGE_PERCENT", value)
+
+    with pytest.raises(RuntimeError, match="MAX_DISK_USAGE_PERCENT must be between 0 and 100"):
+        Settings().validate()
+
+
+def test_max_disk_usage_percent_defaults_to_zero(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "123:ABC")
+    monkeypatch.delenv("ALLOWED_USERS", raising=False)
+    monkeypatch.setenv("ALLOW_PUBLIC", "1")
+    monkeypatch.delenv("MAX_DISK_USAGE_PERCENT", raising=False)
+
+    assert Settings().MAX_DISK_USAGE_PERCENT == 0
