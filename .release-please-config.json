@@ -1,0 +1,56 @@
+{
+  "packages": {
+    ".": {
+      "package-name": "scraping-bot",
+      "release-type": "python",
+      "changelog-path": "CHANGELOG.md",
+      "version-file": "pyproject.toml",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".release-please-manifest.json",
+          "jsonpath": "."
+        }
+      ],
+      "changelog-sections": [
+        { "type": "feat", "section": "Features", "hidden": false },
+        { "type": "fix", "section": "Bug Fixes", "hidden": false },
+        { "type": "refactor", "section": "Refactoring", "hidden": false },
+        { "type": "docs", "section": "Documentation", "hidden": false },
+        { "type": "chore", "section": "Chores", "hidden": false },
+        { "type": "chore(deps)", "section": "Dependency Updates", "hidden": false },
+        { "type": "test", "section": "Tests", "hidden": false },
+        { "type": "ci", "section": "CI", "hidden": false },
+        { "type": "build", "section": "Build", "hidden": false },
+        { "type": "perf", "section": "Performance", "hidden": false },
+        { "type": "style", "section": "Code Style", "hidden": false }
+      ]
+    }
+  },
+  "changelog-sections": [
+    { "type": "feat", "section": "Features", "hidden": false },
+    { "type": "fix", "section": "Bug Fixes", "hidden": false },
+    { "type": "refactor", "section": "Refactoring", "hidden": false },
+    { "type": "docs", "section": "Documentation", "hidden": false },
+    { "type": "chore", "section": "Chores", "hidden": false },
+    { "type": "chore(deps)", "section": "Dependency Updates", "hidden": false },
+    { "type": "test", "section": "Tests", "hidden": false },
+    { "type": "ci", "section": "CI", "hidden": false },
+    { "type": "build", "section": "Build", "hidden": false },
+    { "type": "perf", "section": "Performance", "hidden": false },
+    { "type": "style", "section": "Code Style", "hidden": false }
+  ],
+  "plugins": [
+    {
+      "type": "github",
+      "release": true
+    }
+  ],
+  "github-token-env-var": "GITHUB_TOKEN",
+  "default-branch": "main",
+  "include-v-in-tag": true,
+  "pr-title": "chore: release ${version}",
+  "command": "git commit -am '${pr-title}'"
+}
