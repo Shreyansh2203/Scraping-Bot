@@ -1,8 +1,3 @@
-"""Pure output parsing for the extractors.
-
-These functions take everything they need as arguments and return plain dicts, so they
-can be tested without constructing a DownloaderWrapper and without spawning a process.
-"""
 
 from __future__ import annotations
 

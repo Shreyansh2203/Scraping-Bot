@@ -1,9 +1,3 @@
-"""Checks the relative links and in-document anchors in the Markdown docs.
-
-Documentation that points at a file that moved, or a section that got renamed, is a
-silent rot that no other gate would catch. This walks the same links a reader would
-follow, so the fix is always "update the doc" rather than "delete the assertion".
-"""
 
 import re
 from pathlib import Path

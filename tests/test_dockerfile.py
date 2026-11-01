@@ -1,9 +1,3 @@
-"""Guards on the deployment contract the code and the docs agree on.
-
-Nothing here runs the image; these assert the declarations that the CI container job
-then exercises for real. The point is to fail fast and locally when a documented
-requirement drifts away from the Dockerfile, rather than discovering it in a release.
-"""
 
 from pathlib import Path
 

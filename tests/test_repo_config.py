@@ -1,11 +1,3 @@
-"""Gates on the configuration this repository ships rather than imports.
-
-`render.yaml`, `render.yaml`'s comments, and `.release-please-config.json` are all
-consumed by a third party at deploy or release time, which means nothing in the test
-suite or the type checker would notice when they drift away from the code and the
-README. These assertions are deliberately written without a YAML dependency: the
-structures being read are a list of mappings and a list of sections.
-"""
 
 import json
 import re

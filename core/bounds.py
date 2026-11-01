@@ -1,10 +1,3 @@
-"""Constants and pure helpers for the size/duration bound probe.
-
-yt-dlp is asked to print the size and duration it already knows, on its own line,
-before it starts transferring anything. That lets the bot refuse an oversized or
-over-long file without writing a single byte -- and without retrying a condition that
-is deterministic, not transient.
-"""
 
 from __future__ import annotations
 
