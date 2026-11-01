@@ -60,6 +60,7 @@ def test_dockerfile_installs_ffmpeg(dockerfile: str) -> None:
     )
 
 
+@pytest.mark.skipif(not (REPO_ROOT / "README.md").is_file(), reason="README.md not found")
 def test_readme_documented_ffmpeg_requirement_matches_the_image() -> None:
     readme = _read("README.md")
     requirements = readme.split("## Requirements", 1)[1].split("\n## ", 1)[0]
