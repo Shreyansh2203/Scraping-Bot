@@ -1,4 +1,3 @@
-
 import pytest
 
 # Every name core/config.py reads. Kept in step with the source by

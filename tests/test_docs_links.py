@@ -1,4 +1,3 @@
-
 import re
 from pathlib import Path
 
@@ -6,7 +5,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DOCS = tuple(
-    name for name in ("README.md", "CONTRIBUTING.md", "SECURITY.md", "CHANGELOG.md")
+    name
+    for name in ("README.md", "CONTRIBUTING.md", "SECURITY.md", "CHANGELOG.md")
     if (REPO_ROOT / name).is_file()
 )
 
