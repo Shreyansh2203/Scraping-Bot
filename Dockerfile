@@ -29,6 +29,7 @@ ENV PYTHONUNBUFFERED=1 \
     DOWNLOAD_DIR=/app/downloads
 
 RUN apt-get update && \
+    apt-get upgrade -y --no-install-recommends && \
     apt-get install -y --no-install-recommends ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
