@@ -42,12 +42,6 @@
     { "type": "perf", "section": "Performance", "hidden": false },
     { "type": "style", "section": "Code Style", "hidden": false }
   ],
-  "plugins": [
-    {
-      "type": "github",
-      "release": true
-    }
-  ],
   "github-token-env-var": "GITHUB_TOKEN",
   "default-branch": "main",
   "include-v-in-tag": true,
