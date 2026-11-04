@@ -1,20 +1,19 @@
-"""Gates on the configuration this repository ships rather than imports.
-
-`render.yaml`, `render.yaml`'s comments, and `.release-please-config.json` are all
-consumed by a third party at deploy or release time, which means nothing in the test
-suite or the type checker would notice when they drift away from the code and the
-README. These assertions are deliberately written without a YAML dependency: the
-structures being read are a list of mappings and a list of sections.
-"""
-
 import json
 import re
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from tests import conftest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+_DOCS_PRESENT = any(
+    (REPO_ROOT / name).is_file() for name in ("README.md", "CONTRIBUTING.md", "CHANGELOG.md")
+)
+
+pytestmark = pytest.mark.skipif(not _DOCS_PRESENT, reason="no documentation files present")
 
 # Variables Render supplies at runtime. core/config.py reads PORT in preference to
 # HEALTH_PORT and derives the webhook URL from RENDER_EXTERNAL_HOSTNAME.

@@ -708,6 +708,22 @@ def test_subprocess_kwargs_starts_a_new_session_on_posix(monkeypatch):
     assert _subprocess_kwargs() == {"start_new_session": True}
 
 
+def test_subprocess_kwargs_uses_creation_flags_on_windows(monkeypatch):
+    # CREATE_NO_WINDOW / CREATE_NEW_PROCESS_GROUP do not exist as attributes on
+    # POSIX CPython, so the monkeypatch supplies them explicitly: the branch
+    # under test is the one POSIX CI runners would otherwise never execute,
+    # which is exactly how the 100% floor failed on ubuntu-latest.
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
+
+    kwargs = _subprocess_kwargs()
+
+    assert kwargs["creationflags"] & 0x08000000
+    assert kwargs["creationflags"] & 0x00000200
+    assert "start_new_session" not in kwargs
+
+
 def test_is_safe_url_rejects_a_url_the_parser_refuses_to_split():
     # urlsplit raises ValueError on an unterminated IPv6 literal, which must not
     # escape as an exception from a value a Telegram user typed.
