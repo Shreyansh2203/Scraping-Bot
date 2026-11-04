@@ -24,6 +24,7 @@ Built with Python 3.12+, aiogram 3.x, yt-dlp, and gallery-dl.
   - [Pre-commit hooks](#pre-commit-hooks)
 - [Deployment](#deployment)
   - [Render (recommended)](#render-recommended)
+  - [Production Docker Compose](#production-docker-compose)
   - [Other platforms](#other-platforms)
 - [License](#license)
 
@@ -197,6 +198,31 @@ The blueprint configures:
 - Health check on `/health`
 - `HEALTH_BIND=0.0.0.0` for container networking
 - `sync: false` for secrets (`BOT_TOKEN`, `ALLOWED_USERS`, `ALLOW_PUBLIC`)
+
+### Production Docker Compose
+
+`docker-compose.prod.yml` runs the bot with Redis for distributed rate limiting,
+persistent volumes for downloads and logs, a non-root user, and container health
+checks:
+
+```bash
+# Required secrets
+export BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+export ALLOWED_USERS=111222333,444555666
+
+# Optional overrides
+export REDIS_URL=redis://redis:6379/0
+export MAX_FILE_SIZE_MB=50
+export MAX_DURATION_SECONDS=600
+export CONCURRENT_DOWNLOADS=2
+export MAX_DISK_USAGE_PERCENT=85
+
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+The stack exposes `:8080` for `/health` and `/metrics`. Redis is optional — remove
+the `redis` service and unset `REDIS_URL` for a single-replica deployment, in
+which case rate limiting falls back to per-process in-memory tracking.
 
 ### Other platforms
 
