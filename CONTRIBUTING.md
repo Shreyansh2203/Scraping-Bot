@@ -92,7 +92,7 @@ uv run pytest tests/test_config.py -v
 uv run pytest -k "test_settings" -v
 ```
 
-Target: **100% coverage** on `bot/` and `core/`. The CI enforces a 98% floor.
+Target: **100% coverage** on `bot/` and `core/`. The CI enforces a 100% floor.
 
 ## Dependency Updates
 
