@@ -1,0 +1,60 @@
+# Render blueprint for the bot. See the README for what each variable does.
+#
+#   PORT and RENDER_EXTERNAL_HOSTNAME are deliberately absent: Render injects both at
+#   runtime, and PORT is what core/config.py prefers over HEALTH_PORT.
+#   WEBHOOK_URL is deliberately absent for the same reason: it is derived from the
+#   injected RENDER_EXTERNAL_HOSTNAME by core/config.py, and setting it to an empty
+#   string is what selects long polling instead of the webhook Render expects.
+#   BOT_MODE is deliberately absent: webhook is the correct mode on Render, and
+#   BOT_MODE=polling is the escape hatch for platforms with no inbound URL.
+#   HEALTH_PORT is deliberately absent: it is superseded by the injected PORT, which
+#   core/config.py prefers and which Render always sets.
+#
+# The image is built from the repository Dockerfile rather than installed at deploy time,
+# so there is deliberately no build command and no pip install step here. That Dockerfile
+# pins its base image and its uv binary by digest and runs `uv sync --locked` against the
+# committed uv.lock, which is what makes a deploy of this commit reproducible; the
+# hash-pinned requirements.txt is the same resolution for anyone installing without uv.
+
+services:
+  - type: web
+    name: scraping-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ALLOWED_USERS
+        # Never `value: ""`. An empty allow-list stops the bot at startup, and Render
+        # would overwrite a value entered in the dashboard on every sync. `sync: false`
+        # leaves the variable out of Blueprint management so the dashboard value stands.
+        sync: false
+      - key: ALLOW_PUBLIC
+        # The escape hatch for a deliberately public bot, and it is `sync: false` for
+        # the same reason: a public bot is something you type, not something a
+        # blueprint switch flips on you at the next deploy.
+        sync: false
+      - key: HEALTH_BIND
+        value: 0.0.0.0
+      - key: DOWNLOAD_DIR
+        value: /app/downloads
+      - key: CONCURRENT_DOWNLOADS
+        value: 2
+      - key: MAX_FILE_SIZE_MB
+        value: 50
+      - key: MAX_DURATION_SECONDS
+        value: 600
+      - key: SUBPROCESS_TIMEOUT
+        value: 300
+      - key: FFPROBE_TIMEOUT
+        value: 10
+      - key: MAX_DISK_USAGE_PERCENT
+        value: 85
+      - key: REDIS_URL
+        # Optional: set in the dashboard to a Render Redis URL for
+        # distributed rate limiting across replicas; leave unset for
+        # in-memory single-replica rate limiting.
+        sync: false

@@ -1,0 +1,14 @@
+# Repository Code Owners
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything in the repository
+* @Shreyansh2203
+
+# Core downloader & bot handlers
+/bot/ @Shreyansh2203
+/core/ @Shreyansh2203
+
+# CI/CD and deployment configurations
+/.github/ @Shreyansh2203
+/Dockerfile @Shreyansh2203
+/render.yaml @Shreyansh2203

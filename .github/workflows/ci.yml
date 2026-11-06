@@ -1,0 +1,245 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+# Cancels in-progress runs on the same PR to save resources
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # uv 0.12.14 is the resolver the Dockerfile is pinned to, so CI and the image agree
+  # on which resolver produced uv.lock.
+  UV_VERSION: "0.12.14"
+  # Pinned by digest, the same image the CI smoke test blackholes api.telegram.org with.
+  PYTHON_IMAGE: python:3.13.7-slim-bookworm@sha256:adafcc17694d715c905b4c7bebd96907a1fd5cf183395f0ebc4d3428bd22d92d
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install ffmpeg and ffprobe
+        # The downloader shells out to both and the suite mocks every subprocess, so
+        # without this the image assumption is never exercised on a runner. ffmpeg is
+        # what lets yt-dlp merge separate audio and video streams; ffprobe reads the
+        # resolution that ends up in the delivery caption.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
+      - name: Verify the lockfile is current
+        # Fails if pyproject.toml moved without uv.lock being regenerated, which is the
+        # difference between a reproducible build and a fresh resolve on every run.
+        run: uv lock --check
+
+      - name: Install the locked dependency set
+        # --python pins the interpreter explicitly: without it uv follows .python-version
+        # (3.12) and the 3.13 leg would silently test 3.12.
+        run: uv sync --locked --python ${{ matrix.python-version }}
+
+      - name: Format check (Ruff)
+        run: uv run ruff format --check .
+
+      - name: Lint check (Ruff)
+        run: uv run ruff check .
+
+      - name: Type check (Mypy)
+        run: uv run mypy bot core
+
+      - name: Run tests (Pytest)
+        run: |
+          set +e
+          uv run pytest -q --tb=line -rf > /tmp/pytest.log 2>&1
+          code=$?
+          # Surface each failure as a job annotation. A bare "exit code 1" is not
+          # diagnosable from the run summary, and the raw log needs authentication.
+          grep -E '^(FAILED|ERROR)' /tmp/pytest.log | while read -r line; do
+            echo "::error title=pytest::${line}"
+          done
+          tail -40 /tmp/pytest.log
+          exit $code
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Review the dependency diff
+        # Catches a vulnerable or badly licensed package arriving through a pull
+        # request. Moderate is the floor rather than the default low so that a
+        # low-severity advisory in a transitive dependency does not block every PR.
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+
+  container:
+    name: Container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Check Dockerfile syntax and build invariants
+        run: docker build --check .
+
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: scraping-bot:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Confirm ffmpeg is in the image
+        run: |
+          docker run --rm --entrypoint sh scraping-bot:ci -c '
+            command -v ffmpeg
+            command -v ffprobe
+            ffmpeg -version | head -1
+          '
+
+      - name: Confirm the image does not run as root
+        run: |
+          uid="$(docker run --rm --entrypoint id scraping-bot:ci -u)"
+          echo "container uid: ${uid}"
+          if [ "${uid}" = "0" ]; then
+            echo "::error::the image runs as root; it is meant to run as botuser"
+            exit 1
+          fi
+
+      - name: Start the image against a blackholed Telegram API
+        run: |
+          # on_startup calls delete_webhook, aiogram does not retry it, and the failure
+          # unwinds main()'s finally block, so a bot that cannot reach Telegram tears
+          # itself down within milliseconds of binding the health port. Aliasing
+          # api.telegram.org to a container that accepts the TCP connection and never
+          # answers parks the process exactly where this test needs it: health server
+          # up, Telegram request still pending.
+          #
+          # BOT_TOKEN is a syntactically valid throwaway that satisfies the
+          # core.config <bot_id>:<secret> check. It is not a real token and is never
+          # used to reach Telegram.
+          docker network create smoke-net
+          docker run -d --name telegram-blackhole \
+            --network smoke-net --network-alias api.telegram.org \
+            --entrypoint python "$PYTHON_IMAGE" \
+            -c "import socket; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('0.0.0.0', 443)); s.listen(); [c for c in iter(s.accept, None)]"
+          docker run -d --name smoke-bot --network smoke-net -p 8080:8080 \
+            -e BOT_TOKEN=1000000000:CiSmokeTestThrowawayTokenNotARealBotToken \
+            -e ALLOWED_USERS=111222333 \
+            scraping-bot:ci
+
+      - name: Assert /health and /metrics
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health -o /tmp/health.json; then break; fi
+            sleep 1
+          done
+          test -s /tmp/health.json || { echo "::error::/health never answered"; exit 1; }
+          curl -fsS http://127.0.0.1:8080/metrics -o /tmp/metrics.txt
+          python3 - <<'PY'
+          import json
+          import re
+
+          with open("/tmp/health.json", encoding="utf-8") as handle:
+              health = json.load(handle)
+          print("health:", json.dumps(health, sort_keys=True))
+
+          assert health["status"] == "ok", health
+          assert isinstance(health["uptime_seconds"], int), health
+          assert health["active_downloads"] == 0, health
+          assert health["concurrent"] >= 1, health
+          assert health["output_dir"], health
+          assert isinstance(health["version"], str) and health["version"], health
+
+          with open("/tmp/metrics.txt", encoding="utf-8") as handle:
+              metrics = handle.read()
+
+          expected = {
+              "scraping_bot_uptime_seconds",
+              "scraping_bot_active_downloads",
+              "scraping_bot_concurrent_limit",
+          }
+          samples = {}
+          for line in metrics.splitlines():
+              if not line.strip() or line.startswith("#"):
+                  continue
+              name, _, value = line.partition(" ")
+              samples[name] = value.strip()
+
+          assert not (expected - samples.keys()), f"missing from /metrics: {expected - samples.keys()}"
+          for name in sorted(expected):
+              assert f"# HELP {name} " in metrics, f"no HELP line for {name}"
+              assert f"# TYPE {name} gauge" in metrics, f"{name} is not a gauge"
+              assert re.fullmatch(r"-?\d+(\.\d+)?([eE][-+]?\d+)?", samples[name]), (name, samples[name])
+          print("metrics:", json.dumps(samples, sort_keys=True))
+          PY
+
+      - name: Assert the image's own HEALTHCHECK goes healthy
+        # The declared healthcheck is part of the deployment contract on Render, and a
+        # permission or PATH mistake in it is invisible to the /health assertion above:
+        # that one is made from outside the container.
+        run: |
+          for _ in $(seq 1 12); do
+            state="$(docker inspect --format '{{.State.Health.Status}}' smoke-bot)"
+            [ "${state}" = "healthy" ] && break
+            echo "healthcheck state: ${state}"
+            sleep 5
+          done
+          test "$(docker inspect --format '{{.State.Health.Status}}' smoke-bot)" = "healthy"
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          echo "--- smoke-bot ---"
+          docker logs smoke-bot 2>&1 || true
+          echo "--- telegram-blackhole ---"
+          docker logs telegram-blackhole 2>&1 || true
+
+      - name: Tear down the smoke test
+        if: always()
+        run: |
+          docker rm -f smoke-bot telegram-blackhole 2>&1 || true
+          docker network rm smoke-net 2>&1 || true

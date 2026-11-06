@@ -1,0 +1,85 @@
+[project]
+name = "scraping-bot"
+version = "1.0.0"
+description = "Telegram bot for downloading videos from Instagram and Twitter/X"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "Shreyansh Srivastava" }]
+keywords = ["telegram", "bot", "yt-dlp", "instagram", "twitter", "downloader"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = [
+    "aiogram>=3.4.0",
+    "yt-dlp>=2024.1.0",
+    "gallery-dl>=1.26.0",
+    "python-dotenv>=1.0.0",
+    "aiohttp>=3.9.0",
+]
+
+# PEP 735 development group. This replaces the old [project.optional-dependencies] dev
+# extra: `uv sync` installs the `dev` group by default, so `uv sync --no-dev` is the
+# only thing the image needs, and there is no second copy of the tool list to keep in
+# step. There is deliberately no black here: ruff format is the single formatter, and
+# the pre-commit ruff-format hook and CI were already running it.
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "pip-audit>=2.6.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bot*", "core*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+# Bare `mypy` checks the shipped code only — the same tree CI checks
+# (`mypy bot core`). Tests are run by pytest, not type-checked under strict:
+# scoping here keeps the documented command green without loosening checks
+# on the code that ships.
+files = ["bot", "core"]
+exclude = ["tests/"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --tb=short --cov=bot --cov=core --cov-report=term-missing"
+
+[tool.coverage.report]
+# The README targets 100% coverage of bot/ and core/. The floor enforces that: any
+# uncovered line in the packaged modules fails the build, so regressions cannot slip
+# in unnoticed. Adding a new module still requires tests for its reachable statements.
+fail_under = 100
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
