@@ -1,8 +1,11 @@
-# Scraping Bot
+﻿# Scraping Bot
 
 Telegram bot for downloading videos from Instagram and Twitter/X.
 
 Built with Python 3.12+, aiogram 3.x, yt-dlp, and gallery-dl.
+
+Send a supported Instagram or X/Twitter link to the bot in Telegram; it downloads the media and replies with the file.
+By default, only Telegram IDs listed in `ALLOWED_USERS` can use it.
 
 ## Table of contents
 
@@ -42,27 +45,32 @@ The Docker image includes ffmpeg. On a host without Docker, install ffmpeg via y
 
 ```bash
 # Clone and enter the repository
-git clone https://github.com/your-org/scraping-bot.git
-cd scraping-bot
+git clone https://github.com/Shreyansh2203/Scraping-Bot.git
+cd Scraping-Bot
 
 # Install dependencies (uv recommended)
 uv sync
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your BOT_TOKEN and ALLOWED_USERS
+# Edit .env: set BOT_TOKEN from @BotFather and ALLOWED_USERS to your
+# numeric Telegram user ID(s), comma-separated. Keep ALLOW_PUBLIC unset
+# unless you intentionally want an open bot.
 
 # Run the bot
 uv run python -m bot.main
 ```
 
+After the bot starts, open its Telegram chat and send a link from [Supported URLs](#supported-urls).
+
 ### With Docker
+
+Create `.env` as described above before starting the container; the file is read locally and should not be committed.
 
 ```bash
 docker build -t scraping-bot .
 docker run -d \
-  -e BOT_TOKEN=your_token \
-  -e ALLOWED_USERS=123456789 \
+  --env-file .env \
   -p 8080:8080 \
   scraping-bot
 ```
@@ -89,6 +97,8 @@ All configuration is via environment variables. The bot validates its configurat
 | `HEALTH_BIND` | No | `127.0.0.1` | Interface the health server binds to. Use `0.0.0.0` inside Docker/Render. |
 | `SUBPROCESS_TIMEOUT` | No | `180` | Seconds before an extraction subprocess is killed. |
 | `FFPROBE_TIMEOUT` | No | `10` | Seconds before ffprobe is killed when probing resolution. |
+| `REDIS_URL` | No | — | Redis URL for distributed rate limiting across replicas. Empty = in-memory only. |
+| `MAX_DISK_USAGE_PERCENT` | No | `0` | Refuse new downloads when the download partition is this percent full. `0` disables the guard. |
 | `BOT_MODE` | No | `auto` | Set to `polling` to force long polling. Otherwise a webhook is used when `RENDER_EXTERNAL_HOSTNAME` or `WEBHOOK_URL` is present. |
 | `RENDER_EXTERNAL_HOSTNAME` | No | — | Injected by Render at runtime. Used to derive the webhook URL. |
 | `WEBHOOK_URL` | No | — | Explicit webhook URL. Takes precedence over the derived one. |

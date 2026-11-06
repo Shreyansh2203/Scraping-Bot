@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-11-06
+
+### Changed
+- Promoted to Production/Stable: version `0.1.0` → `1.0.0`, Trove classifier `4 - Beta` → `5 - Production/Stable`
+- `.env.example`, README configuration table, and `render.yaml` now cover `REDIS_URL` and `MAX_DISK_USAGE_PERCENT`
+- `mypy` scoped to shipped code (`files = ["bot", "core"]`) so bare `mypy` matches CI
+
 ## [0.1.0] - 2026-10-23
 
 ### Features

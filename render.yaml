@@ -51,3 +51,10 @@ services:
         value: 300
       - key: FFPROBE_TIMEOUT
         value: 10
+      - key: MAX_DISK_USAGE_PERCENT
+        value: 85
+      - key: REDIS_URL
+        # Optional: set in the dashboard to a Render Redis URL for
+        # distributed rate limiting across replicas; leave unset for
+        # in-memory single-replica rate limiting.
+        sync: false
