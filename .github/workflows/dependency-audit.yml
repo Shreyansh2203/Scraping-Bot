@@ -59,7 +59,8 @@ jobs:
         run: uv sync --locked
 
       - name: Export runtime dependencies for audit
-        run: uv export --no-hashes --no-group dev --format requirements-txt --output-file requirements.txt
+        # --no-emit-project keeps the project itself (not on PyPI) out of the audit set.
+        run: uv export --no-hashes --no-group dev --no-emit-project --format requirements-txt --output-file requirements.txt
 
       - name: Audit the locked runtime dependencies
         # requirements.txt is a uv export of the lockfile, so this audits the
