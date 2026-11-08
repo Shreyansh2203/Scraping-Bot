@@ -13,23 +13,21 @@
 
 </div>
 
-<details open>
-<summary><b>Table of Contents</b></summary>
+## Table of contents
 
-- [Overview](#-overview)
-- [Features](#-features)
-- [Tech Stack](#-tech-stack)
-- [Project Structure](#-project-structure)
-- [Quick Start](#-quick-start)
-- [Configuration](#-configuration)
-- [Endpoints](#-endpoints)
-- [Security](#-security)
-- [Testing](#-testing)
-- [Deployment](#-deployment)
-- [Contributing](#-contributing)
-- [License](#-license)
-
-</details>
+- [Overview](#overview)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Endpoints](#endpoints)
+- [Security](#security)
+- [Testing](#testing)
+- [Deployment](#deployment)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
@@ -55,6 +53,14 @@ Production-ready: version `1.0.0`, `Development Status :: 5 - Production/Stable`
 | **Webhook secret** | Per-process minted `secret_token` (never logged or persisted) |
 | **Graceful shutdown** | Download drain + resource cleanup on SIGTERM/SIGINT |
 | **100% test coverage** | 270 tests passing |
+
+---
+
+## Requirements
+
+- Python 3.12+
+- ffmpeg (required by yt-dlp to merge separate audio and video streams)
+- A Telegram bot token from [@BotFather](https://t.me/botfather)
 
 ---
 
@@ -118,13 +124,13 @@ Scraping-Bot/
 
 ## Quick Start
 
-### Prerequisites
+**Prerequisites**
 
 - Python 3.12+
 - [uv](https://github.com/astral-sh/uv)
 - A Telegram bot token from [@BotFather](https://t.me/botfather)
 
-### Install & Run
+**Install & Run**
 
 ```bash
 cd Scraping-Bot
@@ -155,7 +161,7 @@ curl http://127.0.0.1:8080/health
 # {"status":"ok","version":"1.0.0","active_downloads":0,...}
 ```
 
-### Run with Docker
+**Run with Docker**
 
 ```bash
 docker build -t scraping-bot .
