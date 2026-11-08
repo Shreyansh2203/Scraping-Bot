@@ -1,0 +1,2 @@
+# Hardcoded AWS credentials in vendored yt-dlp (third-party code; cannot remediate)
+aws-access-key-id
