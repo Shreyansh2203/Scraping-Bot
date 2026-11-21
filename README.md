@@ -75,6 +75,7 @@ Production-ready: version `1.0.0`, `Development Status :: 5 - Production/Stable`
 - [gallery-dl](https://github.com/mikf/gallery-dl) — gallery downloader
 - [aiohttp](https://docs.aiohttp.org/) — health HTTP server
 - [python-dotenv](https://pypi.org/project/python-dotenv/) — env loading
+- [pydantic](https://docs.pydantic.dev/) + [pydantic-settings](https://docs.pydantic.dev/latest/integrations/settings/) — typed, validated settings
 
 </details>
 
