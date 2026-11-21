@@ -1,6 +1,6 @@
 # syntax = docker/dockerfile:1.7
 # Build stage: resolve and install dependencies with uv
-FROM python:3.13.7-slim-bookworm AS builder
+FROM python:3.15.2-slim-bookworm AS builder
 
 ENV UV_VERSION=0.12.14
 ENV UV_COMPILE_BYTECODE=1
@@ -18,7 +18,7 @@ RUN uv sync --locked --no-dev --python 3.13
 
 
 # Runtime stage: minimal image with only the application and its dependencies
-FROM python:3.13.7-slim-bookworm
+FROM python:3.15.2-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
