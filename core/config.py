@@ -4,85 +4,126 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Any, cast
 
 from dotenv import load_dotenv
-
-logger = logging.getLogger(__name__)
+from pydantic import PrivateAttr, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 _BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]+$")
 
+_PENDING_MALFORMED: list[str] = []
 
-class Settings:
-    def __init__(self) -> None:
-        self.BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
-        self.DOWNLOAD_DIR: Path = Path(os.getenv("DOWNLOAD_DIR", "./downloads"))
-        self.CONCURRENT_DOWNLOADS: int = self._safe_int(os.getenv("CONCURRENT_DOWNLOADS", "2"), 2)
-        self.MAX_FILE_SIZE_MB: int = self._safe_int(os.getenv("MAX_FILE_SIZE_MB", "50"), 50)
-        self.MAX_DURATION_SECONDS: int = self._safe_int(
-            os.getenv("MAX_DURATION_SECONDS", "600"), 600
-        )
-        # The entries ALLOWED_USERS carried that are not Telegram user IDs. Kept so
-        # validate() can refuse to start rather than start with a shorter list.
-        self._malformed_user_ids: list[str] = []
-        self.ALLOWED_USERS: list[int] = self._parse_allowed_users(os.getenv("ALLOWED_USERS", ""))
-        # A public bot is a deliberate choice, so it has to be spelled out.
-        self.ALLOW_PUBLIC: bool = os.getenv("ALLOW_PUBLIC", "").strip() == "1"
-        self.HEALTH_PORT: int = self._safe_int(
-            os.getenv("PORT", os.getenv("HEALTH_PORT", "8080")), 8080
-        )
-        self.HEALTH_BIND: str = os.getenv("HEALTH_BIND", "127.0.0.1")
-        self.SUBPROCESS_TIMEOUT: int = self._safe_int(os.getenv("SUBPROCESS_TIMEOUT", "180"), 180)
-        self.FFPROBE_TIMEOUT: int = self._safe_int(os.getenv("FFPROBE_TIMEOUT", "10"), 10)
 
-        # Redis URL for distributed rate limiting across bot replicas. Unset = in-memory only.
-        self.REDIS_URL: str = os.getenv("REDIS_URL", "")
+def _parse_allowed_users_value(v: Any) -> list[int]:
+    """Parse a comma-separated ALLOWED_USERS string into ints, tracking malformed entries.
 
-        # Fraction of the download partition that may be used before new downloads
-        # are refused. 0 disables the guard.
-        self.MAX_DISK_USAGE_PERCENT: int = self._safe_int(
-            os.getenv("MAX_DISK_USAGE_PERCENT", "0"), 0
-        )
-
-        self.BOT_MODE: str = os.getenv("BOT_MODE", "").lower()
-        self.RENDER_EXTERNAL_HOSTNAME: str = os.getenv("RENDER_EXTERNAL_HOSTNAME", "")
-        if self.BOT_MODE == "polling":
-            self.WEBHOOK_URL: str = ""
-        else:
-            self.WEBHOOK_URL = os.getenv("WEBHOOK_URL") or (
-                f"https://{self.RENDER_EXTERNAL_HOSTNAME}/webhook"
-                if self.RENDER_EXTERNAL_HOSTNAME
-                else ""
-            )
-
-    @staticmethod
-    def _safe_int(value: str, default: int) -> int:
-        try:
-            return int(value)
-        except (ValueError, TypeError):
-            logger.warning("Invalid integer value '%s', using default %s", value, default)
-            return default
-
-    def _parse_allowed_users(self, value: str) -> list[int]:
-        """Split ALLOWED_USERS into ids, recording anything that is not one.
-
-        The dropped entries are remembered so validate() can refuse to start. Silently
-        shrinking the list is what made a typo invisible: "" , "   " and "," all yield an
-        empty list, and AuthMiddleware reads an empty list as "no restriction".
-        """
-        users: list[int] = []
-        for uid in value.split(","):
+    ``str`` type keeps pydantic-settings from JSON-decoding the value; we parse
+    manually so a stray comma or non-numeric ID is recorded rather than silently
+    shrinking the allow-list.
+    """
+    global _PENDING_MALFORMED
+    if isinstance(v, list):
+        _PENDING_MALFORMED = []
+        return v
+    users: list[int] = []
+    malformed: list[str] = []
+    if v:
+        for uid in str(v).split(","):
             uid = uid.strip()
             if uid:
                 try:
                     users.append(int(uid))
                 except ValueError:
-                    self._malformed_user_ids.append(uid)
+                    malformed.append(uid)
                     logger.warning("Invalid user ID '%s', skipping", uid)
-        return users
+    _PENDING_MALFORMED = malformed
+    return users
 
-    def validate(self) -> None:
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(extra="ignore")
+
+    BOT_TOKEN: str = ""
+    DOWNLOAD_DIR: Path = Path("./downloads")
+    CONCURRENT_DOWNLOADS: int = 2
+    MAX_FILE_SIZE_MB: int = 50
+    MAX_DURATION_SECONDS: int = 600
+    ALLOWED_USERS: Any = []
+    ALLOW_PUBLIC: bool = False
+    HEALTH_PORT: int = 8080
+    HEALTH_BIND: str = "127.0.0.1"
+    SUBPROCESS_TIMEOUT: int = 180
+    FFPROBE_TIMEOUT: int = 10
+    REDIS_URL: str = ""
+    MAX_DISK_USAGE_PERCENT: int = 0
+    BOT_MODE: str = ""
+    RENDER_EXTERNAL_HOSTNAME: str = ""
+    WEBHOOK_URL: str = ""
+
+    _malformed_user_ids: list[str] = PrivateAttr(default_factory=list)
+
+    @field_validator("HEALTH_PORT", mode="before")
+    @classmethod
+    def _resolve_health_port(cls, value: Any) -> Any:
+        port = os.getenv("PORT") or None
+        if port is not None:
+            return port
+        return value
+
+    @field_validator(
+        "CONCURRENT_DOWNLOADS",
+        "MAX_FILE_SIZE_MB",
+        "MAX_DURATION_SECONDS",
+        "SUBPROCESS_TIMEOUT",
+        "FFPROBE_TIMEOUT",
+        "MAX_DISK_USAGE_PERCENT",
+        "HEALTH_PORT",
+        mode="before",
+    )
+    @classmethod
+    def _safe_int(cls, value: Any, info: Any) -> int:
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            default = cast(int, cls.model_fields[info.field_name].default)
+            logger.warning("Invalid integer value '%s', using default %s", value, default)
+            return default
+
+    @field_validator("ALLOW_PUBLIC", mode="before")
+    @classmethod
+    def _parse_allow_public(cls, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip() == "1"
+
+    @field_validator("ALLOWED_USERS", mode="before")
+    @classmethod
+    def _parse_allowed_users(cls, value: Any) -> list[int]:
+        return _parse_allowed_users_value(value)
+
+    @model_validator(mode="after")
+    def _capture_malformed_and_compute_webhook(self) -> "Settings":
+        self._malformed_user_ids = list(_PENDING_MALFORMED)
+
+        if self.BOT_MODE == "polling":
+            self.WEBHOOK_URL = ""
+        elif os.getenv("WEBHOOK_URL"):
+            pass
+        else:
+            self.WEBHOOK_URL = (
+                f"https://{self.RENDER_EXTERNAL_HOSTNAME}/webhook"
+                if self.RENDER_EXTERNAL_HOSTNAME
+                else ""
+            )
+
+        return self
+
+    def validate(self) -> None:  # type: ignore[override]
         if not self.BOT_TOKEN:
             raise RuntimeError("BOT_TOKEN is not set")
         if not _BOT_TOKEN_RE.match(self.BOT_TOKEN):

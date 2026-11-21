@@ -165,9 +165,11 @@ class DownloaderWrapper:
         grows without a timeout of its own. Turning the wait into an immediate answer
         costs the caller a retry and costs the bot its monopolisation.
 
-        There is no await between the ``locked()`` check and the acquire below:
-        ``Semaphore.acquire`` decrements and returns without yielding when the
-        semaphore is free, so the check cannot be raced by another task.
+        ``locked()`` is a snapshot: between this check and the ``acquire`` await,
+        another task can grab the slot, so the fast-refusal is best-effort, not
+        airtight. The semaphore still caps true concurrency; the check exists to
+        return quickly instead of queueing behind in-flight downloads that have no
+        per-request timeout of their own.
         """
         if self.semaphore.locked():
             return DownloadResult(
