@@ -186,15 +186,15 @@ docker compose -f docker-compose.prod.yml up --build
 | `WEBHOOK_URL` | `""` | No | Set for webhook mode; empty = polling |
 | `RENDER_EXTERNAL_HOSTNAME` | `""` | No | Auto-derives webhook URL on Render |
 | `HEALTH_PORT` | `8080` | No | Health server port |
-| `HEALTH_BIND` | `0.0.0.0` | No | Health server bind address |
+| `HEALTH_BIND` | `127.0.0.1` | No | Health server bind address |
 | `BOT_MODE` | `polling` | No | `polling` or `webhook` |
 | `DOWNLOAD_DIR` | `downloads` | No | Download output directory |
 | `CONCURRENT_DOWNLOADS` | `2` | No | Max concurrent downloads |
-| `MAX_FILE_SIZE_MB` | `2000` | No | Max file size per download |
-| `MAX_DURATION_SECONDS` | `3600` | No | Max video duration |
-| `MAX_DISK_USAGE_PERCENT` | `85` | No | Max disk usage before refusal |
-| `SUBPROCESS_TIMEOUT` | `300` | No | yt-dlp subprocess timeout |
-| `FFPROBE_TIMEOUT` | `30` | No | ffprobe timeout |
+| `MAX_FILE_SIZE_MB` | `50` | No | Max file size per download |
+| `MAX_DURATION_SECONDS` | `600` | No | Max video duration |
+| `MAX_DISK_USAGE_PERCENT` | `0` | No | Max disk usage before refusal |
+| `SUBPROCESS_TIMEOUT` | `180` | No | yt-dlp subprocess timeout |
+| `FFPROBE_TIMEOUT` | `10` | No | ffprobe timeout |
 
 All settings load via pydantic `Settings.validate()` — `BOT_TOKEN` is required and must match `<bot_id>:<secret>`.
 
@@ -242,7 +242,7 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy bot core
 
 # Dependency audit
-uv run pip-audit --strict --requirement requirements.txt
+uv run pip-audit --strict
 ```
 
 CI enforces: `ruff` clean, `mypy` clean, `pytest` 270/270, `pip-audit` clean, `Trivy` CRITICAL/HIGH clean.
